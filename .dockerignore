@@ -1,0 +1,54 @@
+# Docker ignore file to speed up builds
+# Only include necessary files in build context
+
+# Ignore cache and temporary files
+shared_cache/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Ignore development files
+*.log
+*.tmp
+*.backup
+*.bak
+*copy*
+*.new
+*.old
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore Git files
+.git/
+.gitignore
+
+# Ignore documentation
+README.md
+docs/
+
+# Ignore screenshots and APKs during builds (mounted as volumes)
+apks/
+
+# Ignore node_modules (will be installed during build)
+**/node_modules/
+
+# Service-specific ignores
+backend/__pycache__/
+ai_agent/__pycache__/
+emulator/__pycache__/

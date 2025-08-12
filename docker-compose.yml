@@ -1,0 +1,146 @@
+networks:
+  paime-net:
+    driver: bridge
+
+services:
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apks:/app/apks
+      - ./shared_cache/pip_cache:/root/.cache/pip
+      - ./ai_agent/screenshots:/app/screenshots
+    environment:
+      - DATABASE_URL=postgresql://paime:paime123@db:5432/paime
+      - REDIS_URL=redis://redis:6379
+      - PYTHONUNBUFFERED=1
+    networks:
+      - paime-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  emulator:
+    build: 
+      context: ./emulator
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./apks:/app/apks
+      - ./shared_cache/pip_cache:/root/.cache/pip
+    environment:
+      - DATABASE_URL=postgresql://paime:paime123@db:5432/paime
+      - REDIS_URL=redis://redis:6379
+      - PYTHONUNBUFFERED=1
+    networks:
+      - paime-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5555/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  ai_agent:
+    build: 
+      context: ./ai_agent
+      dockerfile: Dockerfile
+    volumes:
+      - ./apks:/app/apks
+      - ./shared_cache/pip_cache:/root/.cache/pip
+      - ./ai_agent/screenshots:/app/screenshots
+    environment:
+      - DATABASE_URL=postgresql://paime:paime123@db:5432/paime
+      - REDIS_URL=redis://redis:6379
+      - EMULATOR_URL=http://emulator:5555
+      - PYTHONUNBUFFERED=1
+    networks:
+      - paime-net
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      emulator:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import redis; r=redis.Redis(host=\"redis\", port=6379); r.ping()' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s  # Give time for package installation
+    restart: unless-stopped
+
+  dashboard:
+    build: 
+      context: ./dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    networks:
+      - paime-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  db:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=paime
+      - POSTGRES_PASSWORD=paime123
+      - POSTGRES_DB=paime
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - paime-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paime"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:6
+    networks:
+      - paime-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:

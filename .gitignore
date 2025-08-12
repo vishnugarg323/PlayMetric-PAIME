@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Node
+node_modules/
+dist/
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+apks/*.apk
+logs/
+.env
+*.db
+*.sqlite
+
+# PAIME Cache System - Keep cache but ignore Docker images
+shared_cache/docker_images/
+*.tmp
+*.backup
+*.bak
+*copy*
+*.new
+*.old
+
+# Docker
+docker-compose.override.yml

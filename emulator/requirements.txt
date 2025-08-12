@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pillow
+numpy
+redis
+asyncpg
+websockets
+psutil
+aiofiles

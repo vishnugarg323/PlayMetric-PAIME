@@ -1,66 +1,194 @@
-import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Eye, Activity, Camera, Clock, Bug, Zap } from 'lucide-react'
-import { api } from '../services/api'
 import GamePlayer from '../components/GamePlayer'
 import TelemetryChart from '../components/TelemetryChart'
 import BugTimeline from '../components/BugTimeline'
 import AIThoughts from '../components/AIThoughts'
 
 export default function SessionDetailPage() {
-  const { sessionId } = useParams<{ sessionId: string }>()
-  const [activeTab, setActiveTab] = useState<'overview' | 'live' | 'screenshots'>('overview')
-  const [isLiveMode, setIsLiveMode] = useState(false)
-  
-  const { data: session } = useQuery({
-    queryKey: ['session', sessionId],
-    queryFn: () => api.getSessionDetails(sessionId!),
-  })
-  
-  const { data: liveSession, refetch: refetchLive } = useQuery({
-    queryKey: ['session-live', sessionId],
-    queryFn: () => fetch(`/api/sessions/${sessionId}/live`).then(res => res.json()),
-    enabled: isLiveMode,
-    refetchInterval: isLiveMode ? 2000 : false, // Refresh every 2 seconds when in live mode
-  })
-  
-  const { data: screenshots } = useQuery({
-    queryKey: ['session-screenshots', sessionId],
-    queryFn: () => fetch(`/api/sessions/${sessionId}/screenshots`).then(res => res.json()),
-  })
-  
-  useEffect(() => {
-    if (session?.session?.status === 'active') {
-      setIsLiveMode(true)
-      setActiveTab('live')
+  // Static demo session details for all games
+  const sessionDetailsMap: Record<string, any> = {
+    'demo-session-1': {
+      session_id: 'demo-session-1',
+      game_name: 'Screw Unscrew',
+      status: 'active',
+      start_time: new Date().toISOString(),
+      end_time: null,
+      max_level_reached: 2,
+      max_score: 245,
+      ai_thoughts: [
+        'I am trying to click OK to start the level.',
+        'I clicked and the screw got over.',
+        'Level cleared! AI detected a UI glitch: screw count flickers.',
+        'Bug categorized as UI glitch, impacts score display.'
+      ],
+      bugs: [
+        {
+          bug_id: '1',
+          bug_type: 'UI glitch',
+          severity: 'critical',
+          description: 'Screw count display flickers when moving to level 2.',
+          timestamp: new Date().toISOString()
+        },
+        {
+          bug_id: '2',
+          bug_type: 'Logic bug',
+          severity: 'high',
+          description: 'Screw does not register in the box on first attempt in level 2.',
+          timestamp: new Date().toISOString()
+        }
+      ],
+      telemetry: [
+        { timestamp: new Date().toISOString(), fps: 60, cpu_usage: 30, memory_usage: 120 }
+      ]
+    },
+    'demo-session-2': {
+      session_id: 'demo-session-2',
+      game_name: 'Factory Jam',
+      status: 'completed',
+      start_time: new Date().toISOString(),
+      end_time: new Date().toISOString(),
+      max_level_reached: 5,
+      max_score: 980,
+      ai_thoughts: [
+        'Sorting bottles as they arrive on the conveyor.',
+        'AI noticed a sorting error when speed increased.',
+        'Bug categorized as critical: bottle sorting fails.',
+        'UI froze after sorting 10 bottles.'
+      ],
+      bugs: [
+        {
+          bug_id: '3',
+          bug_type: 'Sorting error',
+          severity: 'critical',
+          description: 'Bottle sorting fails when conveyor speed increases.',
+          timestamp: new Date().toISOString()
+        },
+        {
+          bug_id: '4',
+          bug_type: 'UI freeze',
+          severity: 'medium',
+          description: 'UI freezes when sorting more than 10 bottles.',
+          timestamp: new Date().toISOString()
+        }
+      ],
+      telemetry: [
+        { timestamp: new Date().toISOString(), fps: 55, cpu_usage: 40, memory_usage: 150 }
+      ]
+    },
+    'demo-session-3': {
+      session_id: 'demo-session-3',
+      game_name: 'Blocky Knits',
+      status: 'active',
+      start_time: new Date().toISOString(),
+      end_time: null,
+      max_level_reached: 3,
+      max_score: 410,
+      ai_thoughts: [
+        'Arranging yarn blocks for the puzzle.',
+        'AI detected puzzle logic issue in hard level.',
+        'Level stuck after completing level 3.',
+        'Bug categorized as low severity.'
+      ],
+      bugs: [
+        {
+          bug_id: '5',
+          bug_type: 'Puzzle logic',
+          severity: 'high',
+          description: 'Yarn blocks do not align correctly in hard levels.',
+          timestamp: new Date().toISOString()
+        },
+        {
+          bug_id: '6',
+          bug_type: 'Level stuck',
+          severity: 'low',
+          description: 'Player gets stuck after completing level 3.',
+          timestamp: new Date().toISOString()
+        }
+      ],
+      telemetry: [
+        { timestamp: new Date().toISOString(), fps: 62, cpu_usage: 25, memory_usage: 100 }
+      ]
+    },
+    'demo-session-4': {
+      session_id: 'demo-session-4',
+      game_name: 'Make Them 100!',
+      status: 'completed',
+      start_time: new Date().toISOString(),
+      end_time: new Date().toISOString(),
+      max_level_reached: 4,
+      max_score: 600,
+      ai_thoughts: [
+        'Dragging bubble pieces to form groups.',
+        'AI detected bubble count error after popping.',
+        'Pop animation bug observed when popping multiple bubbles.',
+        'Bug categorized as medium severity.'
+      ],
+      bugs: [
+        {
+          bug_id: '7',
+          bug_type: 'Bubble count error',
+          severity: 'medium',
+          description: 'Bubble count does not reset after popping.',
+          timestamp: new Date().toISOString()
+        },
+        {
+          bug_id: '8',
+          bug_type: 'Pop animation bug',
+          severity: 'low',
+          description: 'Pop animation lags when popping multiple bubbles.',
+          timestamp: new Date().toISOString()
+        }
+      ],
+      telemetry: [
+        { timestamp: new Date().toISOString(), fps: 58, cpu_usage: 35, memory_usage: 110 }
+      ]
     }
-  }, [session])
-  
-  if (!session) return (
-    <div className="flex justify-center items-center h-64">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-    </div>
-  )
-  
-  const sessionData = session.session
-  const isActive = sessionData.status === 'active'
-  
+  };
+
+  // Get sessionId from route or props
+  const sessionId = window.location.pathname.split('/').pop();
+  const sessionDetail = sessionDetailsMap[sessionId || 'demo-session-1'];
+  const [activeTab, setActiveTab] = useState<'overview' | 'live' | 'screenshots'>('overview');
+  const isActive = sessionDetail.status === 'active'
+
+  // Mock liveSession and refetchLive for demo purposes
+  const [liveSession, setLiveSession] = useState<{
+    current_screenshot?: string;
+    latest_telemetry?: {
+      fps?: number;
+      current_level?: number;
+      score?: number;
+    };
+  } | null>(null);
+
+  function refetchLive() {
+    // Simulate fetching live session data
+    setLiveSession({
+      current_screenshot: '', // put base64 string here if available
+      latest_telemetry: {
+        fps: 60,
+        current_level: 2,
+        score: 245
+      }
+    });
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex justify-between items-start">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Session Details</h1>
-          <p className="text-gray-600 mt-1">{sessionData.game_name} - {sessionData.session_id}</p>
+          <p className="text-gray-600 mt-1">{sessionDetail.game_name} - {sessionDetail.session_id}</p>
         </div>
         <div className="flex items-center space-x-3">
           <span className={`px-3 py-1 rounded-full text-sm font-medium ${
             isActive ? 'bg-green-100 text-green-800' :
-            sessionData.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+            sessionDetail.status === 'completed' ? 'bg-blue-100 text-blue-800' :
             'bg-red-100 text-red-800'
           }`}>
-            {sessionData.status.toUpperCase()}
+            {sessionDetail.status.toUpperCase()}
           </span>
           {isActive && (
             <div className="flex items-center text-green-600">
@@ -79,8 +207,8 @@ export default function SessionDetailPage() {
             <div>
               <div className="text-sm text-gray-600">Duration</div>
               <div className="font-semibold">
-                {sessionData.end_time 
-                  ? Math.round((new Date(sessionData.end_time).getTime() - new Date(sessionData.start_time).getTime()) / 60000) + 'm'
+                {sessionDetail.end_time 
+                  ? Math.round((new Date(sessionDetail.end_time).getTime() - new Date(sessionDetail.start_time).getTime()) / 60000) + 'm'
                   : 'Ongoing'
                 }
               </div>
@@ -92,7 +220,7 @@ export default function SessionDetailPage() {
             <Zap className="w-5 h-5 text-yellow-500 mr-2" />
             <div>
               <div className="text-sm text-gray-600">Max Level</div>
-              <div className="font-semibold">{sessionData.max_level_reached}</div>
+              <div className="font-semibold">{sessionDetail.max_level_reached}</div>
             </div>
           </div>
         </div>
@@ -101,7 +229,7 @@ export default function SessionDetailPage() {
             <Bug className="w-5 h-5 text-red-500 mr-2" />
             <div>
               <div className="text-sm text-gray-600">Bugs Found</div>
-              <div className="font-semibold">{session.bugs?.length || 0}</div>
+              <div className="font-semibold">{sessionDetail.bugs?.length || 0}</div>
             </div>
           </div>
         </div>
@@ -110,7 +238,7 @@ export default function SessionDetailPage() {
             <Activity className="w-5 h-5 text-blue-500 mr-2" />
             <div>
               <div className="text-sm text-gray-600">Score</div>
-              <div className="font-semibold">{sessionData.max_score || 0}</div>
+              <div className="font-semibold">{sessionDetail.max_score || 0}</div>
             </div>
           </div>
         </div>
@@ -154,7 +282,7 @@ export default function SessionDetailPage() {
               }`}
             >
               <Camera className="w-4 h-4 mr-2" />
-              Screenshots ({screenshots?.total_count || 0})
+              Screenshots ({sessionDetail?.screenshots?.length || 0})
             </button>
           </nav>
         </div>
@@ -170,12 +298,12 @@ export default function SessionDetailPage() {
                     <GamePlayer sessionId={sessionId!} />
                   </div>
                 </div>
-                <TelemetryChart data={session.telemetry || []} />
+                <TelemetryChart data={sessionDetail.telemetry || []} />
               </div>
               
               <div className="space-y-6">
                 <AIThoughts sessionId={sessionId!} />
-                <BugTimeline bugs={session.bugs || []} />
+                <BugTimeline bugs={sessionDetail.bugs || []} />
               </div>
             </div>
           )}
@@ -267,9 +395,9 @@ export default function SessionDetailPage() {
           {activeTab === 'screenshots' && (
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">Session Screenshots</h3>
-              {screenshots?.screenshots?.length > 0 ? (
+              {sessionDetail?.screenshots?.length > 0 ? (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {screenshots.screenshots.map((screenshot: any, index: number) => (
+                  {sessionDetail.screenshots.map((screenshot: any, index: number) => (
                     <div key={index} className="bg-white rounded-lg border overflow-hidden">
                       <div className="aspect-video bg-gray-100">
                         <img

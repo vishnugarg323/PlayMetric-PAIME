@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+DEMO_MODE = os.getenv('DEMO_MODE', 'false').lower() == 'true'
 import uuid
 from datetime import datetime
 from typing import Dict, Optional
@@ -506,17 +507,48 @@ async def start_session(game_id: str):
 
 @app.get("/api/sessions/{session_id}/screenshot")
 async def get_screenshot(session_id: str):
-    """Get current screenshot for session"""
+    """Get current screenshot for session (demo mode returns fake data)"""
+    if DEMO_MODE:
+        # Return a static/fake screenshot and game state
+        img = Image.new('RGB', (1080, 1920), color=(30, 30, 50))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([50, 100, 1030, 200], fill=(70, 70, 100))
+        draw.text((100, 130), "Demo Mode: Emulator Display", fill=(255, 255, 255))
+        draw.text((100, 160), "Game running... (FAKE)", fill=(200, 200, 200))
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        screenshot_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        return {
+            "session_id": session_id,
+            "screenshot": screenshot_b64,
+            "frame_count": 42,
+            "game_state": {
+                "score": 12345,
+                "lives": 3,
+                "level": 7,
+                "player_x": 540,
+                "player_y": 960,
+                "elements": ["coin", "enemy", "powerup"],
+                "ai_actions": [
+                    {"action": "jump", "frame": 40, "confidence": 0.92},
+                    {"action": "collect", "frame": 41, "confidence": 0.88}
+                ]
+            },
+            "knowledge_stats": {
+                "levels_discovered": 7,
+                "mechanics_learned": 3,
+                "difficulty_assessment": 4.2
+            }
+        }
+    # Real mode
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-        
     try:
         session = active_sessions[session_id]
         screenshot = await session.generate_screenshot()
-        
         if not screenshot:
             raise HTTPException(status_code=500, detail="Failed to generate screenshot")
-            
         return {
             "session_id": session_id,
             "screenshot": screenshot,
@@ -534,7 +566,17 @@ async def get_screenshot(session_id: str):
 
 @app.post("/api/sessions/{session_id}/action")
 async def perform_action(session_id: str, action_data: dict):
-    """Perform AI action in session with advanced simulation and bug scenarios"""
+    """Perform AI action in session (demo mode returns fake response)"""
+    if DEMO_MODE:
+        action_type = action_data.get('type', 'tap')
+        return {
+            "status": "action_performed",
+            "action": action_type,
+            "demo": True,
+            "ai_thought": f"AI decided to {action_type} (FAKE)",
+            "bug_detected": action_type == "tap" and True or False,
+            "bug_type": "UI glitch" if action_type == "tap" else None
+        }
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
@@ -585,6 +627,57 @@ async def perform_action(session_id: str, action_data: dict):
     except Exception as e:
         logger.error(f"Failed to perform action: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+@app.get("/api/demo/ai-thoughts")
+async def get_demo_ai_thoughts():
+    """Return fake AI thoughts for demo mode, specific to 'screw unscrew' game up to level 2"""
+    if not DEMO_MODE:
+        raise HTTPException(status_code=403, detail="Demo mode not enabled")
+    return {
+        "thoughts": [
+            "AI is observing the screw unscrewing process in level 1.",
+            "AI detected a slow response when placing the screw in the box.",
+            "AI recommends using the correct tool for unscrewing.",
+            "AI noticed a UI lag when transitioning to level 2.",
+            "AI confirms successful completion of level 1.",
+            "AI is monitoring screw placement accuracy in level 2.",
+            "AI detected a minor bug: screw not registering in the box on first attempt.",
+            "AI analysis: User is progressing efficiently to level 2."
+        ]
+    }
+
+@app.get("/api/demo/bugs")
+async def get_demo_bugs():
+    """Return fake bug list for demo mode, specific to 'screw unscrew' game up to level 2"""
+    if not DEMO_MODE:
+        raise HTTPException(status_code=403, detail="Demo mode not enabled")
+    return {
+        "bugs": [
+            {"id": 1, "type": "UI glitch", "description": "Screw count display flickers when moving to level 2."},
+            {"id": 2, "type": "Logic bug", "description": "Screw does not register in the box on first attempt in level 2."},
+            {"id": 3, "type": "Performance", "description": "Noticeable lag when unscrewing multiple screws quickly in level 1."}
+        ]
+    }
+
+@app.get("/api/demo/statistics")
+async def get_demo_statistics():
+    """Return fake statistics for demo mode, specific to 'screw unscrew' game up to level 2"""
+    if not DEMO_MODE:
+        raise HTTPException(status_code=403, detail="Demo mode not enabled")
+    return {
+        "sessions": 1,
+        "average_score": 245,
+        "bugs_found": 3,
+        "levels_completed": 2,
+        "ai_confidence": 0.93,
+        "level_progress": {
+            "level_1": "Completed",
+            "level_2": "In progress"
+        },
+        "actions": {
+            "screws_unscrewed": 12,
+            "screws_placed_in_box": 11
+        }
+    }
 
 @app.get("/api/sessions/{session_id}/screenshot")
 async def get_screenshot(session_id: str):

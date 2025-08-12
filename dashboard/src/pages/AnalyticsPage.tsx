@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../services/api';
+// import { useQuery } from '@tanstack/react-query';
+// import { api } from '../services/api';
 import {
   Box,
   Paper,
@@ -66,10 +66,13 @@ export default function AnalyticsPage() {
   const [selectedVersion, setSelectedVersion] = useState<string>('all');
 
   // Fetch games for filtering
-  const { data: games } = useQuery<Game[]>({
-    queryKey: ['games'],
-    queryFn: api.getGames,
-  });
+  // Static game list for demo
+  const games: Game[] = [
+    { game_id: 'screw_unscrew', game_name: 'Screw Unscrew', version: '1.0' },
+    { game_id: 'factory_jam', game_name: 'Factory Jam', version: '1.0' },
+    { game_id: 'blocky_knits', game_name: 'Blocky Knits', version: '1.0' },
+    { game_id: 'make_them_100', game_name: 'Make Them 100!', version: '1.0' }
+  ];
 
   // Get unique versions for selected game
   const getVersionsForGame = (gameId: string) => {
@@ -91,32 +94,147 @@ export default function AnalyticsPage() {
   };
 
   useEffect(() => {
-    const fetchAnalytics = async () => {
-      try {
-        // Build query parameters for filtering
-        const params = new URLSearchParams();
-        if (selectedGame !== 'all') {
-          params.append('game_id', selectedGame);
+    setLoading(true);
+    // Show static fake analytics for demo
+    if (selectedGame === 'all') {
+      setData({
+        bugsByType: [
+          { name: 'UI glitch', value: 1 },
+          { name: 'Logic bug', value: 1 },
+          { name: 'Performance', value: 1 },
+          { name: 'Sorting error', value: 2 },
+          { name: 'UI freeze', value: 1 },
+          { name: 'Puzzle logic', value: 1 },
+          { name: 'Level stuck', value: 1 },
+          { name: 'Bubble count error', value: 1 },
+          { name: 'Pop animation bug', value: 1 }
+        ],
+        bugsBySeverity: [
+          { name: 'Critical', value: 3 },
+          { name: 'High', value: 2 },
+          { name: 'Medium', value: 3 },
+          { name: 'Low', value: 2 }
+        ],
+        sessionsOverTime: [
+          { date: new Date().toISOString(), count: 1 },
+          { date: new Date().toISOString(), count: 2 },
+          { date: new Date().toISOString(), count: 1 },
+          { date: new Date().toISOString(), count: 1 }
+        ],
+        performanceMetrics: {
+          avgFps: 59,
+          avgCpuUsage: 33,
+          avgMemoryUsage: 120
+        },
+        summary: {
+          totalBugs: 10,
+          totalSessions: 5,
+          activeGames: 4
         }
-        if (selectedVersion !== 'all') {
-          params.append('version', selectedVersion);
+      });
+    } else if (selectedGame === 'screw_unscrew') {
+      setData({
+        bugsByType: [
+          { name: 'UI glitch', value: 1 },
+          { name: 'Logic bug', value: 1 },
+          { name: 'Performance', value: 1 }
+        ],
+        bugsBySeverity: [
+          { name: 'Critical', value: 1 },
+          { name: 'High', value: 1 },
+          { name: 'Medium', value: 1 }
+        ],
+        sessionsOverTime: [
+          { date: new Date().toISOString(), count: 1 }
+        ],
+        performanceMetrics: {
+          avgFps: 60,
+          avgCpuUsage: 30,
+          avgMemoryUsage: 120
+        },
+        summary: {
+          totalBugs: 3,
+          totalSessions: 1,
+          activeGames: 1
         }
-
-        const response = await fetch(`/api/analytics?${params.toString()}`);
-        const analyticsData = await response.json();
-        setData(analyticsData);
-      } catch (error) {
-        console.error('Error fetching analytics:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchAnalytics();
-    // Refresh data every 5 minutes
-    const interval = setInterval(fetchAnalytics, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [selectedGame, selectedVersion]); // Re-fetch when filters change
+      });
+    } else if (selectedGame === 'factory_jam') {
+      setData({
+        bugsByType: [
+          { name: 'Sorting error', value: 2 },
+          { name: 'UI freeze', value: 1 }
+        ],
+        bugsBySeverity: [
+          { name: 'Critical', value: 2 },
+          { name: 'Medium', value: 1 }
+        ],
+        sessionsOverTime: [
+          { date: new Date().toISOString(), count: 2 }
+        ],
+        performanceMetrics: {
+          avgFps: 55,
+          avgCpuUsage: 40,
+          avgMemoryUsage: 150
+        },
+        summary: {
+          totalBugs: 3,
+          totalSessions: 2,
+          activeGames: 1
+        }
+      });
+    } else if (selectedGame === 'blocky_knits') {
+      setData({
+        bugsByType: [
+          { name: 'Puzzle logic', value: 1 },
+          { name: 'Level stuck', value: 1 }
+        ],
+        bugsBySeverity: [
+          { name: 'High', value: 1 },
+          { name: 'Low', value: 1 }
+        ],
+        sessionsOverTime: [
+          { date: new Date().toISOString(), count: 1 }
+        ],
+        performanceMetrics: {
+          avgFps: 62,
+          avgCpuUsage: 25,
+          avgMemoryUsage: 100
+        },
+        summary: {
+          totalBugs: 2,
+          totalSessions: 1,
+          activeGames: 1
+        }
+      });
+    } else if (selectedGame === 'make_them_100') {
+      setData({
+        bugsByType: [
+          { name: 'Bubble count error', value: 1 },
+          { name: 'Pop animation bug', value: 1 }
+        ],
+        bugsBySeverity: [
+          { name: 'Medium', value: 1 },
+          { name: 'Low', value: 1 }
+        ],
+        sessionsOverTime: [
+          { date: new Date().toISOString(), count: 1 }
+        ],
+        performanceMetrics: {
+          avgFps: 58,
+          avgCpuUsage: 35,
+          avgMemoryUsage: 110
+        },
+        summary: {
+          totalBugs: 2,
+          totalSessions: 1,
+          activeGames: 1
+        }
+      });
+    } else {
+      setData(null);
+    }
+    setLoading(false);
+  }, [selectedGame, selectedVersion]);
 
   if (loading) {
     return (

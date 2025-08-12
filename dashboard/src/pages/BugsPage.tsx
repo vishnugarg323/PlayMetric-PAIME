@@ -1,35 +1,266 @@
-import { useQuery } from '@tanstack/react-query'
+// import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, AlertTriangle, Info, Bug } from 'lucide-react'
-import { api } from '../services/api'
+// import { api } from '../services/api'
 import { useState } from 'react'
 
 export default function BugsPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'by-game' | 'by-type' | 'by-version'>('all')
   
-  const { data: bugs, isLoading } = useQuery({
-    queryKey: ['bugs'],
-    queryFn: api.getBugs,
-  })
-  
-  const { data: bugsByGame } = useQuery({
-    queryKey: ['bugs-by-game'],
-    queryFn: () => fetch('/api/bugs/by-game').then(res => res.json()),
-  })
-  
-  const { data: bugsByType } = useQuery({
-    queryKey: ['bugs-by-type'],
-    queryFn: () => fetch('/api/bugs/by-type').then(res => res.json()),
-  })
-  
-  const { data: bugsByVersion } = useQuery({
-    queryKey: ['bugs-by-version'],
-    queryFn: () => fetch('/api/bugs/by-version').then(res => res.json()),
-  })
-  
-  const { data: bugsSummary } = useQuery({
-    queryKey: ['bugs-summary'],
-    queryFn: () => fetch('/api/bugs/summary').then(res => res.json()),
-  })
+  // Static fake bugs for demo for all games
+  const bugs = [
+    // Screw Unscrew
+    {
+      bug_id: 1,
+      bug_type: 'UI glitch',
+      severity: 'critical',
+      game_name: 'Screw Unscrew',
+      description: 'Screw count display flickers when moving to level 2.',
+      timestamp: new Date().toISOString()
+    },
+    {
+      bug_id: 2,
+      bug_type: 'Logic bug',
+      severity: 'high',
+      game_name: 'Screw Unscrew',
+      description: 'Screw does not register in the box on first attempt in level 2.',
+      timestamp: new Date().toISOString()
+    },
+    // Factory Jam
+    {
+      bug_id: 3,
+      bug_type: 'Sorting error',
+      severity: 'critical',
+      game_name: 'Factory Jam',
+      description: 'Bottle sorting fails when conveyor speed increases.',
+      timestamp: new Date().toISOString()
+    },
+    {
+      bug_id: 4,
+      bug_type: 'UI freeze',
+      severity: 'medium',
+      game_name: 'Factory Jam',
+      description: 'UI freezes when sorting more than 10 bottles.',
+      timestamp: new Date().toISOString()
+    },
+    // Blocky Knits
+    {
+      bug_id: 5,
+      bug_type: 'Puzzle logic',
+      severity: 'high',
+      game_name: 'Blocky Knits',
+      description: 'Yarn blocks do not align correctly in hard levels.',
+      timestamp: new Date().toISOString()
+    },
+    {
+      bug_id: 6,
+      bug_type: 'Level stuck',
+      severity: 'low',
+      game_name: 'Blocky Knits',
+      description: 'Player gets stuck after completing level 3.',
+      timestamp: new Date().toISOString()
+    },
+    // Make Them 100!
+    {
+      bug_id: 7,
+      bug_type: 'Bubble count error',
+      severity: 'medium',
+      game_name: 'Make Them 100!',
+      description: 'Bubble count does not reset after popping.',
+      timestamp: new Date().toISOString()
+    },
+    {
+      bug_id: 8,
+      bug_type: 'Pop animation bug',
+      severity: 'low',
+      game_name: 'Make Them 100!',
+      description: 'Pop animation lags when popping multiple bubbles.',
+      timestamp: new Date().toISOString()
+    }
+  ];
+  const bugsByGame = [
+    {
+      game_id: 'screw_unscrew',
+      game_name: 'Screw Unscrew',
+      package_name: 'com.screw.unscrew',
+      total_bugs: 3,
+      critical_bugs: 1,
+      high_bugs: 1,
+      medium_bugs: 1,
+      open_bugs: 3
+    },
+    {
+      game_id: 'factory_jam',
+      game_name: 'Factory Jam',
+      package_name: 'com.factory.jam',
+      total_bugs: 2,
+      critical_bugs: 1,
+      high_bugs: 0,
+      medium_bugs: 1,
+      open_bugs: 2
+    },
+    {
+      game_id: 'blocky_knits',
+      game_name: 'Blocky Knits',
+      package_name: 'com.blocky.knits',
+      total_bugs: 2,
+      critical_bugs: 0,
+      high_bugs: 1,
+      medium_bugs: 1,
+      open_bugs: 2
+    },
+    {
+      game_id: 'make_them_100',
+      game_name: 'Make Them 100!',
+      package_name: 'com.make.them100',
+      total_bugs: 2,
+      critical_bugs: 0,
+      high_bugs: 0,
+      medium_bugs: 1,
+      open_bugs: 2
+    }
+  ];
+  const bugsByType = [
+    {
+      bug_type: 'UI glitch',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 1,
+      high_count: 0,
+      medium_count: 0,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'Logic bug',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 0,
+      high_count: 1,
+      medium_count: 0,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'Performance',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 0,
+      high_count: 0,
+      medium_count: 1,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'Sorting error',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 1,
+      high_count: 0,
+      medium_count: 0,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'UI freeze',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 0,
+      high_count: 0,
+      medium_count: 1,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'Puzzle logic',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 0,
+      high_count: 1,
+      medium_count: 0,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'Level stuck',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 0,
+      high_count: 0,
+      medium_count: 1,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'Bubble count error',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 0,
+      high_count: 0,
+      medium_count: 1,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    },
+    {
+      bug_type: 'Pop animation bug',
+      affected_games: 1,
+      total_bugs: 1,
+      critical_count: 0,
+      high_count: 0,
+      medium_count: 1,
+      low_count: 0,
+      open_count: 1,
+      resolved_count: 0
+    }
+  ];
+  const bugsByVersion = [
+    {
+      game_id: 'screw_unscrew',
+      game_name: 'Screw Unscrew',
+      version: '1.0',
+      release_date: new Date().toISOString(),
+      bugs_introduced: bugs.slice(0, 2),
+      bugs_resolved: []
+    },
+    {
+      game_id: 'factory_jam',
+      game_name: 'Factory Jam',
+      version: '1.0',
+      release_date: new Date().toISOString(),
+      bugs_introduced: bugs.slice(2, 4),
+      bugs_resolved: []
+    },
+    {
+      game_id: 'blocky_knits',
+      game_name: 'Blocky Knits',
+      version: '1.0',
+      release_date: new Date().toISOString(),
+      bugs_introduced: bugs.slice(4, 6),
+      bugs_resolved: []
+    },
+    {
+      game_id: 'make_them_100',
+      game_name: 'Make Them 100!',
+      version: '1.0',
+      release_date: new Date().toISOString(),
+      bugs_introduced: bugs.slice(6, 8),
+      bugs_resolved: []
+    }
+  ];
+  const bugsSummary = {
+    total_bugs: bugs.length,
+    critical_bugs: bugs.filter(b => b.severity === 'critical').length,
+    open_bugs: bugs.length,
+    bug_types_count: Array.from(new Set(bugs.map(b => b.bug_type))).length
+  };
+  const isLoading = false;
   
   const getSeverityIcon = (severity: string) => {
     switch (severity) {

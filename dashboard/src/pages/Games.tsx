@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { gamesApi } from '../lib/api'
+import { gamesApi } from '../common/api'
 import { Plus, Upload, Trash2, Eye } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Button from '../components/Button'
 import Loading from '../components/Loading'
 import EmptyState from '../components/EmptyState'
-import { formatRelativeTime } from '../lib/utils'
+import { formatRelativeTime } from '../common/utils'
 
 export default function Games() {
   const navigate = useNavigate()

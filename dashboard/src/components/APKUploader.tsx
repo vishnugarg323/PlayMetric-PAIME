@@ -1,10 +1,10 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { gamesApi } from '../lib/api'
+import { gamesApi } from '../common/api'
 import { Upload, X, CheckCircle, AlertCircle } from 'lucide-react'
 import Button from './Button'
-import { formatBytes } from '../lib/utils'
+import { formatBytes } from '../common/utils'
 
 interface APKUploaderProps {
   gameId: string

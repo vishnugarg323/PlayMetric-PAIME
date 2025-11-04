@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { gamesApi } from '../lib/api'
+import { gamesApi } from '../common/api'
 import { Upload, Plus } from 'lucide-react'
 import Button from '../components/Button'
 import Loading from '../components/Loading'
 import APKUploader from '../components/APKUploader'
-import { formatBytes, formatRelativeTime } from '../lib/utils'
+import { formatBytes, formatRelativeTime } from '../common/utils'
 
 export default function GameDetails() {
   const { gameId } = useParams()

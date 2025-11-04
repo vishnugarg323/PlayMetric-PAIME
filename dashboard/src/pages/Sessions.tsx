@@ -1,11 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { sessionsApi } from '../lib/api'
+import { sessionsApi } from '../common/api'
 import { Play, Square, Trash2, Eye, Clock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Button from '../components/Button'
 import Loading from '../components/Loading'
 import EmptyState from '../components/EmptyState'
-import { formatRelativeTime } from '../lib/utils'
+import { formatRelativeTime } from '../common/utils'
 
 export default function Sessions() {
   const navigate = useNavigate()

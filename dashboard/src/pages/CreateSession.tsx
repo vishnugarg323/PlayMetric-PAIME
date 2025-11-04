@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { gamesApi, sessionsApi } from '../lib/api'
+import { gamesApi, sessionsApi } from '../common/api'
 import { Play, ArrowLeft } from 'lucide-react'
 import Button from '../components/Button'
 import Loading from '../components/Loading'

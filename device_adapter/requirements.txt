@@ -1,0 +1,9 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+requests==2.31.0
+boto3==1.28.85
+google-cloud-testing==1.4.0
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.23
+selenium==4.15.2
+appium-python-client==3.1.0

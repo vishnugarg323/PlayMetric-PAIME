@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data directories
+data/
+!data/.gitkeep
+apks/*.apk
+!apks/.gitkeep
+
+# Models
+*.zip
+*.h5
+*.pb
+*.pth
+*.ckpt
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+.env.local
+docker-compose.override.yml
+
+# Secrets
+*.key
+*.pem
+secrets/
+
+# Test outputs
+test-results/
+coverage/
+.pytest_cache/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Documentation (only README.md allowed)
+*.md
+!README.md

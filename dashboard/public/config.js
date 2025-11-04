@@ -1,0 +1,5 @@
+// Runtime configuration
+window.ENV = {
+  VITE_API_URL: 'http://localhost:8000',
+  VITE_SOCKET_URL: 'http://localhost:8000'
+};

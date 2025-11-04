@@ -1,0 +1,17 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+numpy==1.26.2
+opencv-python-headless==4.8.1.78
+pillow==10.1.0
+httpx==0.25.2
+torch==2.1.1
+asyncpg==0.29.0
+redis==5.0.1
+scikit-image==0.22.0
+aiofiles==23.2.1
+sqlalchemy[asyncio]==2.0.23
+psycopg2-binary==2.9.9
+pytesseract==0.3.10
+imagehash==4.3.1

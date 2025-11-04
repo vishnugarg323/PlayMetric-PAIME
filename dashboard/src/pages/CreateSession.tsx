@@ -1,0 +1,264 @@
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { gamesApi, sessionsApi } from '../lib/api'
+import { Play, ArrowLeft } from 'lucide-react'
+import Button from '../components/Button'
+import Loading from '../components/Loading'
+
+export default function CreateSession() {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const preSelectedGameId = searchParams.get('gameId')
+
+  const [selectedGameId, setSelectedGameId] = useState<string>(preSelectedGameId || '')
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('')
+  const [agentMode, setAgentMode] = useState<string>('heuristic')
+  const [maxDuration, setMaxDuration] = useState<number>(300)
+  const [maxActions, setMaxActions] = useState<number>(1000)
+
+  const { data: games, isLoading: gamesLoading } = useQuery({
+    queryKey: ['games'],
+    queryFn: () => gamesApi.list().then(r => r.data),
+  })
+
+  const { data: versions, isLoading: versionsLoading } = useQuery({
+    queryKey: ['game-versions', selectedGameId],
+    queryFn: () => gamesApi.versions(selectedGameId).then(r => r.data),
+    enabled: !!selectedGameId,
+  })
+
+  // Auto-select the first version when versions load
+  useEffect(() => {
+    if (versions && versions.length > 0 && !selectedVersionId) {
+      setSelectedVersionId(versions[0].id)
+    }
+  }, [versions])
+
+  const createMutation = useMutation({
+    mutationFn: (data: { game_id: string; version_id: string; agent_mode: string; config: any }) =>
+      sessionsApi.create(data),
+    onSuccess: (response) => {
+      // Navigate to the session details page
+      // Backend returns { session_id, status, message }
+      navigate(`/sessions/${response.data.session_id}`)
+    },
+    onError: (error: any) => {
+      alert(`Failed to create session: ${error.response?.data?.detail || error.message}`)
+    },
+  })
+
+  const handleCreate = () => {
+    if (!selectedGameId || !selectedVersionId) {
+      alert('Please select a game and version')
+      return
+    }
+
+    createMutation.mutate({
+      game_id: selectedGameId,
+      version_id: selectedVersionId,
+      agent_mode: agentMode,
+      config: {
+        max_duration_seconds: maxDuration,
+        max_actions: maxActions,
+        enable_screenshots: true,
+        screenshot_interval: 5,
+      },
+    })
+  }
+
+  if (gamesLoading) return <Loading text="Loading games..." />
+
+  const selectedGame = games?.find(g => g.id === selectedGameId)
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-6">
+      <div className="flex items-center gap-4">
+        <Button variant="ghost" size="sm" onClick={() => navigate('/sessions')}>
+          <ArrowLeft className="w-4 h-4 mr-1" />
+          Back
+        </Button>
+        <div>
+          <h1 className="text-3xl font-bold text-white mb-2">Create New Session</h1>
+          <p className="text-slate-400">Configure and start a new AI testing session</p>
+        </div>
+      </div>
+
+      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 space-y-6">
+        {/* Game Selection */}
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-2">
+            Select Game
+          </label>
+          <select
+            value={selectedGameId}
+            onChange={(e) => {
+              setSelectedGameId(e.target.value)
+              setSelectedVersionId('') // Reset version when game changes
+            }}
+            className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+          >
+            <option value="">-- Choose a game --</option>
+            {games?.map(game => (
+              <option key={game.id} value={game.id}>
+                {game.display_name} ({game.package_name})
+              </option>
+            ))}
+          </select>
+          {selectedGame && (
+            <p className="mt-2 text-sm text-slate-400">
+              Genre: {selectedGame.genre} • Sessions: {selectedGame.total_sessions || 0}
+            </p>
+          )}
+        </div>
+
+        {/* Version Selection */}
+        {selectedGameId && (
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              Select Version
+            </label>
+            {versionsLoading ? (
+              <div className="text-slate-400">Loading versions...</div>
+            ) : versions && versions.length > 0 ? (
+              <>
+                <select
+                  value={selectedVersionId}
+                  onChange={(e) => setSelectedVersionId(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  {versions.map(version => (
+                    <option key={version.id} value={version.id}>
+                      {version.version_name} (Code: {version.version_code}) - {(version.apk_size / 1024 / 1024).toFixed(2)} MB
+                    </option>
+                  ))}
+                </select>
+                {selectedVersionId && (
+                  <p className="mt-2 text-sm text-slate-400">
+                    {versions.find(v => v.id === selectedVersionId)?.metadata && (
+                      <>SDK: {versions.find(v => v.id === selectedVersionId)?.min_sdk} - {versions.find(v => v.id === selectedVersionId)?.target_sdk}</>
+                    )}
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className="text-slate-400 p-4 bg-slate-700 rounded-lg border border-slate-600">
+                No versions available. Please upload an APK first.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Agent Mode */}
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-2">
+            Agent Mode
+          </label>
+          <div className="space-y-3">
+            <label className="flex items-start p-4 bg-slate-700 rounded-lg border-2 border-slate-600 cursor-pointer hover:border-primary-500 transition-colors">
+              <input
+                type="radio"
+                name="agent_mode"
+                value="heuristic"
+                checked={agentMode === 'heuristic'}
+                onChange={(e) => setAgentMode(e.target.value)}
+                className="mt-1 mr-3"
+              />
+              <div>
+                <div className="text-white font-semibold">Heuristic (Rule-Based)</div>
+                <div className="text-sm text-slate-400">
+                  Simple rule-based AI that explores the UI systematically. Fast and deterministic.
+                </div>
+              </div>
+            </label>
+            <label className="flex items-start p-4 bg-slate-700 rounded-lg border-2 border-slate-600 cursor-pointer hover:border-primary-500 transition-colors">
+              <input
+                type="radio"
+                name="agent_mode"
+                value="advanced_rl"
+                checked={agentMode === 'advanced_rl'}
+                onChange={(e) => setAgentMode(e.target.value)}
+                className="mt-1 mr-3"
+              />
+              <div>
+                <div className="text-white font-semibold">Advanced RL (Reinforcement Learning)</div>
+                <div className="text-sm text-slate-400">
+                  Deep Q-Network that learns optimal testing strategies. Adaptive and intelligent.
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {/* Session Configuration */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              Max Duration (seconds)
+            </label>
+            <input
+              type="number"
+              value={maxDuration}
+              onChange={(e) => setMaxDuration(parseInt(e.target.value))}
+              min={30}
+              max={3600}
+              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Session will stop after this duration
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              Max Actions
+            </label>
+            <input
+              type="number"
+              value={maxActions}
+              onChange={(e) => setMaxActions(parseInt(e.target.value))}
+              min={10}
+              max={10000}
+              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Session will stop after this many actions
+            </p>
+          </div>
+        </div>
+
+        {/* Device Info */}
+        <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
+          <h3 className="text-blue-400 font-semibold mb-2">📱 Physical Device Mode</h3>
+          <p className="text-sm text-slate-300 mb-2">
+            This session will run on your connected Android device. Make sure:
+          </p>
+          <ul className="text-sm text-slate-400 space-y-1 list-disc list-inside">
+            <li>Device is connected via USB and ADB is running</li>
+            <li>USB debugging is enabled on the device</li>
+            <li>Screen is unlocked during testing</li>
+            <li>You can watch your phone screen to see AI in action!</li>
+          </ul>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex space-x-3 pt-4">
+          <Button
+            variant="ghost"
+            onClick={() => navigate('/sessions')}
+            className="flex-1"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleCreate}
+            disabled={!selectedGameId || !selectedVersionId || createMutation.isPending}
+            className="flex-1"
+          >
+            <Play className="w-5 h-5 mr-2" />
+            {createMutation.isPending ? 'Creating...' : 'Start Session'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}

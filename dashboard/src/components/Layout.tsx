@@ -3,7 +3,7 @@ import Sidebar from './Sidebar'
 import Header from './Header'
 import { useAppStore } from '../store'
 import { useEffect } from 'react'
-import { wsService } from '../lib/websocket'
+import { wsService } from '../common/websocket'
 
 export default function Layout() {
   const sidebarOpen = useAppStore(state => state.sidebarOpen)

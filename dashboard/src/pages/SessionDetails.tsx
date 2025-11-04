@@ -1,10 +1,10 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { sessionsApi, AIThinking } from '../lib/api'
+import { sessionsApi, AIThinking } from '../common/api'
 import { ArrowLeft, Square, Clock, Bug, Activity, Brain, Zap } from 'lucide-react'
 import Button from '../components/Button'
 import Loading from '../components/Loading'
-import { formatRelativeTime } from '../lib/utils'
+import { formatRelativeTime } from '../common/utils'
 import { useEffect, useState, useRef } from 'react'
 import { io } from 'socket.io-client'
 

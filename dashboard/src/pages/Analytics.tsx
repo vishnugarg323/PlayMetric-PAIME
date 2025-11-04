@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { gamesApi } from '../lib/api'
+import { gamesApi } from '../common/api'
 import { BarChart3, TrendingUp, Clock, Activity } from 'lucide-react'
 import Loading from '../components/Loading'
 import EmptyState from '../components/EmptyState'

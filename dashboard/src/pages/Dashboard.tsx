@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { gamesApi, sessionsApi, bugsApi, agentApi } from '../lib/api'
+import { gamesApi, sessionsApi, bugsApi, agentApi } from '../common/api'
 import { StatCard } from '../components/Card'
 import { Gamepad2, Play, Bug, Brain, AlertTriangle } from 'lucide-react'
 import Loading from '../components/Loading'

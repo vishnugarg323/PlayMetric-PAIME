@@ -120,6 +120,7 @@ export default function SessionDetails() {
       if (payload.type === 'ai_thinking' && payload.data) {
         // Store latest AI analysis data (OCR, UI elements, etc.)
         setLatestAiAnalysis({
+          ocr_text: payload.data.ocr_text || '',
           ocr_detected: payload.data.ocr_detected || false,
           ui_elements_detected: payload.data.ui_elements_detected || 0,
           screen_changed: payload.data.screen_changed || false,
@@ -263,7 +264,10 @@ export default function SessionDetails() {
                     src={screenshotUrl}
                     alt="Current Screen"
                     className="w-full lg:w-72 rounded-lg border-2 border-slate-600 shadow-lg"
-                    onError={() => setScreenshotUrl('')}
+                    onError={() => {
+                      // Keep the current image visible on error, don't clear it
+                      console.warn('Screenshot load error, keeping previous image')
+                    }}
                   />
                   <div className="absolute top-2 right-2 bg-black/70 px-2 py-1 rounded text-xs text-white">
                     {aiActive ? '🤖 AI Active' : '⏸️ Waiting'}
@@ -282,12 +286,31 @@ export default function SessionDetails() {
             {/* AI Analysis Info */}
             <div className="flex-1 space-y-4">
               <div>
-                <h3 className="text-sm font-semibold text-slate-300 mb-2">🧠 What AI Detected from Image</h3>
+                <h3 className="text-sm font-semibold text-slate-300 mb-2">🧠 OCR Text Extracted from Screenshot</h3>
+                <div className="bg-slate-900 rounded-lg p-4 max-h-40 overflow-y-auto">
+                  {latestAiAnalysis?.ocr_text ? (
+                    <p className="text-sm text-green-400 font-mono whitespace-pre-wrap leading-relaxed">
+                      {latestAiAnalysis.ocr_text}
+                    </p>
+                  ) : latestAiAnalysis?.reasoning && latestAiAnalysis.reasoning.includes('OCR detected text:') ? (
+                    <p className="text-sm text-green-400 font-mono whitespace-pre-wrap leading-relaxed">
+                      {latestAiAnalysis.reasoning.split('OCR detected text:')[1]?.trim() || 'Analyzing...'}
+                    </p>
+                  ) : latestAiAnalysis?.ocr_detected ? (
+                    <p className="text-sm text-green-400">✓ Text detected (processing...)</p>
+                  ) : (
+                    <p className="text-sm text-slate-500">○ No text detected in current screenshot</p>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-slate-300 mb-2">📊 AI Vision Analysis</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-slate-900 rounded-lg p-3">
-                    <p className="text-xs text-slate-400">OCR Text Found</p>
+                    <p className="text-xs text-slate-400">Buttons Detected</p>
                     <p className={`text-lg font-bold ${latestAiAnalysis?.ocr_detected ? 'text-green-400' : 'text-slate-500'}`}>
-                      {latestAiAnalysis?.ocr_detected ? '✓ Yes' : '○ None'}
+                      {latestAiAnalysis?.ocr_detected ? '✓ Found' : '○ None'}
                     </p>
                   </div>
                   <div className="bg-slate-900 rounded-lg p-3">

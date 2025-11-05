@@ -124,7 +124,7 @@ CREATE INDEX idx_bug_history_bug_id ON bug_history(bug_id);
 
 -- RL Experiences: Store state-action-reward transitions
 CREATE TABLE rl_experiences (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
     game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -148,7 +148,10 @@ CREATE TABLE rl_experiences (
     priority FLOAT DEFAULT 1.0, -- For prioritized experience replay
     times_used INTEGER DEFAULT 0, -- How many times used in training
     
-    metadata JSONB DEFAULT '{}'::jsonb
+    metadata JSONB DEFAULT '{}'::jsonb,
+    
+    -- Composite primary key including timestamp for TimescaleDB
+    PRIMARY KEY (id, timestamp)
 );
 
 -- Convert to TimescaleDB hypertable for efficient time-series queries
@@ -294,7 +297,7 @@ CREATE INDEX idx_retention_analysis_session_id ON retention_analysis(session_id)
 
 -- Screenshots: Track all captured screenshots
 CREATE TABLE screenshots (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID DEFAULT uuid_generate_v4(),
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     file_path TEXT NOT NULL,
     captured_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -317,7 +320,10 @@ CREATE TABLE screenshots (
     is_game_over BOOLEAN DEFAULT false,
     tags VARCHAR(100)[],
     
-    metadata JSONB DEFAULT '{}'::jsonb
+    metadata JSONB DEFAULT '{}'::jsonb,
+    
+    -- Composite primary key including timestamp for TimescaleDB
+    PRIMARY KEY (id, captured_at)
 );
 
 -- Convert to TimescaleDB hypertable
@@ -331,7 +337,7 @@ CREATE INDEX idx_screenshots_screen_hash ON screenshots(screen_hash);
 
 -- Actions: Record all actions taken
 CREATE TABLE actions (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     executed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     
@@ -339,14 +345,19 @@ CREATE TABLE actions (
     action_params JSONB,
     
     -- Context
-    screenshot_before UUID REFERENCES screenshots(id),
-    screenshot_after UUID REFERENCES screenshots(id),
+    screenshot_before_id UUID,
+    screenshot_before_time TIMESTAMP WITH TIME ZONE,
+    screenshot_after_id UUID,
+    screenshot_after_time TIMESTAMP WITH TIME ZONE,
     
     -- Result
     success BOOLEAN,
     error_message TEXT,
     
-    metadata JSONB DEFAULT '{}'::jsonb
+    metadata JSONB DEFAULT '{}'::jsonb,
+    
+    -- Composite primary key including timestamp for TimescaleDB
+    PRIMARY KEY (id, executed_at)
 );
 
 -- Convert to TimescaleDB hypertable
@@ -404,14 +415,17 @@ CREATE INDEX idx_version_comparisons_compare_version ON version_comparisons(comp
 
 -- Audit Log: Track all important system events
 CREATE TABLE audit_log (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL,
     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     event_type VARCHAR(100) NOT NULL, -- session_started, bug_detected, model_trained, etc.
     entity_type VARCHAR(100), -- game, session, bug, etc.
     entity_id UUID,
     user_id VARCHAR(255),
     details JSONB DEFAULT '{}'::jsonb,
-    ip_address INET
+    ip_address INET,
+    
+    -- Composite primary key including timestamp for TimescaleDB
+    PRIMARY KEY (id, timestamp)
 );
 
 -- Convert to TimescaleDB hypertable

@@ -260,26 +260,52 @@ class GameIntelligence:
             'reasoning': str
         }
         """
-        # Priority 1: Click detected buttons from OCR (even when stuck!)
-        if ocr_data.get('buttons_detected'):
-            button = ocr_data['buttons_detected'][0]  # Click first button
-            return {
-                'action': 'tap',
-                'coordinates': button['center'],
-                'reasoning': f"🎯 SMART TAP: Clicking button '{button['text']}' detected by OCR at {button['center']}"
-            }
+        # Priority 1: Correlate OCR text with visual UI elements for accurate button detection
+        if ocr_data.get('buttons_detected') and ui_elements:
+            # Find UI element near button text (within 200px)
+            button = ocr_data['buttons_detected'][0]
+            button_pos = button['center']
+            
+            for ui_el in ui_elements:
+                el_pos = ui_el['center']
+                # Calculate distance between OCR text and UI element
+                distance = ((button_pos[0] - el_pos[0])**2 + (button_pos[1] - el_pos[1])**2)**0.5
+                
+                if distance < 200:  # Within 200px - likely the same button
+                    logger.info(f"✨ CORRELATED: Button text '{button['text']}' at {button_pos} → UI element at {el_pos} (distance: {distance:.0f}px)")
+                    return {
+                        'action': 'tap',
+                        'coordinates': el_pos,  # Use UI element position, not text position!
+                        'reasoning': f"🎯 SMART TAP: Clicking button '{button['text']}' - correlated OCR text with visual UI element at {el_pos}"
+                    }
         
-        # Priority 2: Click UI elements that look like buttons (even when stuck!)
+        # Priority 2: Click visual UI elements (actual buttons) even without text match
         if ui_elements:
-            # Prefer elements in center or top (where buttons usually are)
-            center_elements = [el for el in ui_elements if 200 < el['center'][1] < 1400]
+            # Prefer elements in center or bottom (where game buttons usually are)
+            center_elements = [el for el in ui_elements if 400 < el['center'][1] < 1600]
             if center_elements:
                 target = center_elements[0]
                 return {
                     'action': 'tap',
                     'coordinates': target['center'],
-                    'reasoning': f"🎯 UI ELEMENT TAP: Clicking detected UI element at {target['center']} (size: {target['area']}px)"
+                    'reasoning': f"🎯 UI ELEMENT TAP: Clicking detected visual UI element at {target['center']} (size: {target['area']}px)"
                 }
+            # Fallback to any UI element
+            target = ui_elements[0]
+            return {
+                'action': 'tap',
+                'coordinates': target['center'],
+                'reasoning': f"🎯 UI ELEMENT TAP: Clicking detected visual element at {target['center']}"
+            }
+        
+        # Priority 3: If only OCR buttons (no UI elements), use OCR position as fallback
+        if ocr_data.get('buttons_detected'):
+            button = ocr_data['buttons_detected'][0]
+            return {
+                'action': 'tap',
+                'coordinates': button['center'],
+                'reasoning': f"📝 OCR FALLBACK: Clicking text '{button['text']}' at {button['center']} (no visual UI element found)"
+            }
         
         # Priority 3: If text detected but no clear buttons, click center of text areas
         if ocr_data.get('words'):

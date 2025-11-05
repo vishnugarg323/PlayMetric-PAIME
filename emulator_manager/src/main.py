@@ -81,6 +81,7 @@ def run_adb_command(command: list[str], timeout: int = 30) -> str:
     """Run ADB command and return output"""
     try:
         adb_cmd = get_adb_base_command() + command
+        logger.debug(f"Running ADB command: {' '.join(adb_cmd)}")
         result = subprocess.run(
             adb_cmd,
             capture_output=True,
@@ -88,6 +89,7 @@ def run_adb_command(command: list[str], timeout: int = 30) -> str:
             timeout=timeout,
             check=True
         )
+        logger.debug(f"ADB command output: {result.stdout.strip()}")
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         logger.error(f"ADB command failed: {e.stderr}")
@@ -300,9 +302,12 @@ async def is_app_running(package: str):
 async def tap(request: TapRequest):
     """Perform tap action"""
     try:
+        logger.info(f"🎯 Executing ADB TAP: adb shell input tap {request.x} {request.y}")
         output = run_adb_command(['shell', 'input', 'tap', str(request.x), str(request.y)])
+        logger.info(f"✅ ADB TAP executed successfully. Output: {output}")
         return {"status": "success", "action": "tap", "x": request.x, "y": request.y}
     except Exception as e:
+        logger.error(f"❌ ADB TAP FAILED: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -360,7 +365,26 @@ async def press_home():
 
 @app.get("/screenshot")
 async def capture_screenshot():
-    """Capture screenshot from emulator"""
+    """Capture screenshot from emulator and return the image"""
+    try:
+        # Capture screenshot to device
+        run_adb_command(['shell', 'screencap', '/sdcard/screenshot.png'])
+        
+        # Pull screenshot
+        timestamp = int(time.time())
+        local_path = f"/tmp/screenshot_{timestamp}.png"
+        run_adb_command(['pull', '/sdcard/screenshot.png', local_path])
+        
+        # Return the actual image file
+        from fastapi.responses import FileResponse
+        return FileResponse(local_path, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/screenshot/info")
+async def get_screenshot_info():
+    """Get screenshot metadata (path and timestamp)"""
     try:
         # Capture screenshot to device
         run_adb_command(['shell', 'screencap', '/sdcard/screenshot.png'])

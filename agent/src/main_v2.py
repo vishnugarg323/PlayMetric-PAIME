@@ -157,8 +157,8 @@ async def play_loop():
     global is_playing, agent, steps_since_training, training_enabled, training_interval
     global current_session_id, ai_active, current_screenshot_path, current_screenshot_count
     
-    action_interval = 10.0  # Slow down to 10 seconds between actions
-    logger.info(f"Starting gameplay loop (interval: {action_interval}s - SLOW MODE for better analysis)")
+    action_interval = 2.0  # 2 seconds between actions for better visibility
+    logger.info(f"Starting gameplay loop (interval: {action_interval}s - Balanced mode for analysis and testing)")
     
     # Wait for AI to be manually activated
     logger.info("⏸️  Waiting for manual AI activation...")
@@ -197,14 +197,10 @@ async def play_loop():
             fresh_screenshot = None
             try:
                 logger.info("📸 Capturing fresh screenshot for AI analysis...")
-                screenshot_response = await http_client.get(f"{emulator_manager_url}/screenshot")
+                screenshot_response = await http_client.get(f"{emulator_manager_url}/screenshot/info")
                 if screenshot_response.status_code == 200:
-                    # Save fresh screenshot temporarily
-                    screenshot_data = screenshot_response.content
-                    fresh_screenshot_path = f"/tmp/fresh_screenshot_{int(time.time() * 1000)}.png"
-                    with open(fresh_screenshot_path, 'wb') as f:
-                        f.write(screenshot_data)
-                    fresh_screenshot = fresh_screenshot_path
+                    screenshot_info = screenshot_response.json()
+                    fresh_screenshot = screenshot_info.get('path')
                     
                     # Store globally for dashboard access
                     current_screenshot_path = fresh_screenshot
@@ -311,11 +307,17 @@ async def play_loop():
                 
                 reasoning = smart_recommendation['reasoning']
                 
+                # Add OCR text to reasoning if available
+                ocr_text = ocr_data.get('text', '')
+                if ocr_text:
+                    reasoning = f"{reasoning}\n\n📝 OCR detected text: {ocr_text[:200]}"
+                
                 await broadcast_ai_thinking({
                     "type": "smart_decision",
                     "action": action.action_type.value,
                     "position": {"x": action.x, "y": action.y},
                     "reasoning": reasoning,
+                    "ocr_text": ocr_text[:500] if ocr_text else None,  # Include raw OCR text
                     "ocr_detected": bool(ocr_data.get('buttons_detected')),
                     "ui_elements_detected": len(ui_elements),
                     "screen_changed": screenshot_comparison.get('changed_significantly', False),
@@ -530,6 +532,7 @@ async def execute_action(action):
     """Execute action via emulator-manager service"""
     try:
         if action.action_type == ActionType.TAP:
+            logger.info(f"📱 ADB COMMAND: adb shell input tap {action.x} {action.y}")
             await http_client.post(
                 f"{emulator_manager_url}/input/tap",
                 json={"x": action.x, "y": action.y}
@@ -537,6 +540,7 @@ async def execute_action(action):
             
         elif action.action_type in [ActionType.SWIPE_UP, ActionType.SWIPE_DOWN, 
                                      ActionType.SWIPE_LEFT, ActionType.SWIPE_RIGHT]:
+            logger.info(f"📱 ADB COMMAND: adb shell input swipe {action.x} {action.y} {action.x2} {action.y2} {action.duration}")
             await http_client.post(
                 f"{emulator_manager_url}/input/swipe",
                 json={
@@ -549,15 +553,17 @@ async def execute_action(action):
             )
             
         elif action.action_type == ActionType.BACK:
+            logger.info(f"📱 ADB COMMAND: adb shell input keyevent KEYCODE_BACK")
             await http_client.post(
                 f"{emulator_manager_url}/input/back"
             )
             
         elif action.action_type == ActionType.WAIT:
             # Just wait, no action needed
+            logger.info(f"⏸️  ACTION: Wait (no ADB command)")
             pass
             
-        logger.debug(f"Executed action: {action.action_type.value}")
+        logger.info(f"✅ Executed action: {action.action_type.value}")
         
         # Capture and broadcast screenshot after action
         if current_session_id:

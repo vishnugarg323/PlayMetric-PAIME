@@ -73,6 +73,7 @@ services:
     volumes:
       - ./apks:/apks
       - ./shared:/app/shared
+      - screenshot-data:/tmp  # Shared volume for screenshots
     networks:
       - playmetric-network
     restart: unless-stopped
@@ -250,6 +251,7 @@ services:
       - ./data/screenshots:/data/screenshots:ro
       - ./shared:/app/shared
       - agent-data:/agent/data
+      - screenshot-data:/tmp  # Shared volume for screenshots with emulator-manager
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -409,3 +411,4 @@ volumes:
   redis-data:
   prometheus-data:
   grafana-data:
+  screenshot-data:  # Shared volume for screenshots between emulator-manager and agent

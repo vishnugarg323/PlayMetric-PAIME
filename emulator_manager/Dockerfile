@@ -1,6 +1,6 @@
-FROM python:3.11-slim
-
-WORKDIR /app
+# Use base image with common dependencies pre-installed
+ARG BASE_IMAGE=playmetric-base:latest
+FROM ${BASE_IMAGE}
 
 # Install Android SDK platform tools (for ADB)
 RUN apt-get update && apt-get install -y \

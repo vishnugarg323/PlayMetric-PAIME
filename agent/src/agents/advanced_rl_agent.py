@@ -481,57 +481,172 @@ class AdvancedRLAgent:
 
 
 class ScreenFeatureExtractor:
-    """Extract features from game screenshots optimized for puzzle games"""
+    """
+    Extract meaningful features from game screenshots for RL
+    OPTIMIZED: Uses semantic features instead of raw pixels for faster learning
+    """
     
     def __init__(self, output_dim: int = 128):
         self.output_dim = output_dim
     
+    def extract_from_analysis(
+        self,
+        screenshot_path: str,
+        ocr_data: dict,
+        ui_elements: list
+    ) -> np.ndarray:
+        """
+        Extract features from screenshot + analysis data
+        This is MUCH better than raw pixels for RL learning
+        """
+        features = []
+        
+        try:
+            # === SEMANTIC FEATURES (Better than pixels) ===
+            
+            # 1. UI element statistics (4 features)
+            num_ui_elements = len(ui_elements)
+            features.append(min(num_ui_elements / 50.0, 1.0))  # Normalized count
+            
+            if ui_elements:
+                avg_area = np.mean([e.get('area', 0) for e in ui_elements])
+                features.append(min(avg_area / 10000.0, 1.0))  # Normalized area
+                
+                # Count small vs large elements
+                small_count = sum(1 for e in ui_elements if e.get('area', 0) < 2000)
+                large_count = sum(1 for e in ui_elements if e.get('area', 0) > 10000)
+                features.append(min(small_count / 20.0, 1.0))
+                features.append(min(large_count / 10.0, 1.0))
+            else:
+                features.extend([0.0, 0.0, 0.0])
+            
+            # 2. OCR text presence (4 features)
+            has_text = 1.0 if ocr_data.get('buttons_detected') else 0.0
+            features.append(has_text)
+            
+            word_count = len(ocr_data.get('words', []))
+            features.append(min(word_count / 20.0, 1.0))
+            
+            # Detect specific keywords
+            text_lower = str(ocr_data.get('text', '')).lower()
+            features.append(1.0 if any(k in text_lower for k in ['play', 'start', 'tap']) else 0.0)
+            features.append(1.0 if any(k in text_lower for k in ['next', 'continue', 'complete']) else 0.0)
+            
+            # 3. Screen region activity (4x4 grid = 16 features)
+            img = cv2.imread(screenshot_path)
+            if img is not None:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                h, w = gray.shape
+                for i in range(4):
+                    for j in range(4):
+                        region = gray[i*h//4:(i+1)*h//4, j*w//4:(j+1)*w//4]
+                        activity = np.std(region) / 255.0  # Normalized activity
+                        features.append(activity)
+            else:
+                features.extend([0.0] * 16)
+            
+            # 4. Color histogram (reduced to 32 bins for speed)
+            if img is not None:
+                hist = cv2.calcHist([img], [0, 1, 2], None, [4, 4, 4], [0, 256, 0, 256, 0, 256])
+                hist = hist.flatten()
+                hist = hist / (hist.sum() + 1e-6)  # Normalize
+                features.extend(hist[:32])  # First 32 bins
+            else:
+                features.extend([0.0] * 32)
+            
+            # 5. Spatial distribution of UI elements (16 features)
+            # Divide screen into 4x4 grid, count elements in each
+            if img is not None and ui_elements:
+                h, w = img.shape[:2]
+                grid_counts = np.zeros((4, 4))
+                for elem in ui_elements:
+                    cx = elem.get('center_x', 0)
+                    cy = elem.get('center_y', 0)
+                    grid_x = min(int(cx / w * 4), 3)
+                    grid_y = min(int(cy / h * 4), 3)
+                    grid_counts[grid_y, grid_x] += 1
+                
+                # Normalize and flatten
+                grid_counts = grid_counts / (grid_counts.max() + 1e-6)
+                features.extend(grid_counts.flatten())
+            else:
+                features.extend([0.0] * 16)
+            
+            # 6. Edge density (global feature)
+            if img is not None:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                edges = cv2.Canny(gray, 50, 150)
+                edge_density = edges.sum() / edges.size
+                features.append(edge_density)
+            else:
+                features.append(0.0)
+            
+            # 7. Color dominance (which color is most present)
+            if img is not None:
+                # Convert to HSV
+                hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+                
+                # Count dominant colors
+                red_mask = cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255]))
+                blue_mask = cv2.inRange(hsv, np.array([100, 100, 100]), np.array([130, 255, 255]))
+                green_mask = cv2.inRange(hsv, np.array([40, 100, 100]), np.array([80, 255, 255]))
+                yellow_mask = cv2.inRange(hsv, np.array([20, 100, 100]), np.array([40, 255, 255]))
+                
+                total_pixels = img.shape[0] * img.shape[1]
+                features.append(red_mask.sum() / total_pixels)
+                features.append(blue_mask.sum() / total_pixels)
+                features.append(green_mask.sum() / total_pixels)
+                features.append(yellow_mask.sum() / total_pixels)
+            else:
+                features.extend([0.0] * 4)
+            
+            # === Total: ~108 features ===
+            # Pad or truncate to output_dim
+            features = np.array(features, dtype=np.float32)
+            if len(features) < self.output_dim:
+                features = np.pad(features, (0, self.output_dim - len(features)))
+            else:
+                features = features[:self.output_dim]
+            
+            return features
+            
+        except Exception as e:
+            logger.error(f"Feature extraction failed: {e}")
+            return np.zeros(self.output_dim, dtype=np.float32)
+    
     def extract(self, screenshot: np.ndarray) -> np.ndarray:
-        """Extract features from screenshot"""
+        """
+        Legacy method: Extract features from raw screenshot only
+        DEPRECATED: Use extract_from_analysis() instead for better results
+        """
         if screenshot is None or screenshot.size == 0:
             return np.zeros(self.output_dim)
         
         try:
-            # Resize to standard size
+            # Simplified feature extraction for backwards compatibility
             img = cv2.resize(screenshot, (84, 84))
             
-            # Convert to grayscale
             if len(img.shape) == 3:
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             else:
                 gray = img
             
-            # Normalize
             normalized = gray.astype(np.float32) / 255.0
             
-            # Extract features
             features = []
             
-            # 1. Histogram (16 bins)
+            # Histogram
             hist = cv2.calcHist([gray], [0], None, [16], [0, 256]).flatten()
             features.extend(hist / hist.sum())
             
-            # 2. Edge detection
-            edges = cv2.Canny(gray, 50, 150)
-            edge_density = edges.sum() / edges.size
-            features.append(edge_density)
-            
-            # 3. Grid features (divide into 3x3 grid)
+            # Grid features
             h, w = normalized.shape
             for i in range(3):
                 for j in range(3):
                     cell = normalized[i*h//3:(i+1)*h//3, j*w//3:(j+1)*w//3]
-                    features.extend([
-                        cell.mean(),
-                        cell.std(),
-                        cell.max()
-                    ])
+                    features.extend([cell.mean(), cell.std()])
             
-            # 4. Flattened downsampled image
-            downsampled = cv2.resize(normalized, (10, 10)).flatten()
-            features.extend(downsampled)
-            
-            # Pad or truncate to output_dim
+            # Pad to output_dim
             features = np.array(features)
             if len(features) < self.output_dim:
                 features = np.pad(features, (0, self.output_dim - len(features)))

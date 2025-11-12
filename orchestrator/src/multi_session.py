@@ -90,11 +90,52 @@ class ResourceManager:
     def __init__(self, limits: ResourceLimits):
         self.limits = limits
         self.allocated_resources: Dict[str, SessionResource] = {}
-        self.available_emulators: Set[str] = set(f"emulator-{i}" for i in range(limits.max_emulator_instances))
+        self.available_emulators: Set[str] = set()  # Will be populated dynamically
         self._lock = asyncio.Lock()
+        self.last_device_scan = None
+        self.device_scan_interval = 30  # Rescan devices every 30 seconds
+    
+    async def refresh_available_devices(self):
+        """Scan and refresh list of available devices via emulator-manager service"""
+        from datetime import datetime, timedelta
+        
+        # Only scan if we haven't scanned recently
+        now = datetime.utcnow()
+        if self.last_device_scan and (now - self.last_device_scan).total_seconds() < self.device_scan_interval:
+            return
+        
+        try:
+            # Use emulator-manager service to get available devices
+            import httpx
+            import os
+            emulator_manager_url = os.getenv("EMULATOR_MANAGER_URL", "http://emulator-manager:8005")
+            
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{emulator_manager_url}/devices/available")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    devices = data.get('devices', [])
+                    
+                    # Track both emulators and physical devices
+                    emulator_count = sum(1 for d in devices if d.get('device_mode') == 'emulator')
+                    physical_count = sum(1 for d in devices if d.get('device_mode') == 'physical')
+                    
+                    self.last_device_scan = now
+                    logger.info(f"🔍 Device scan: Found {len(devices)} devices ({emulator_count} emulators, {physical_count} physical)")
+                    
+                    if not devices:
+                        logger.warning("⚠️ No devices found. Sessions will wait for devices to connect.")
+                else:
+                    logger.warning(f"Failed to scan devices: HTTP {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error scanning devices: {e}")
     
     async def can_allocate(self) -> bool:
         """Check if resources available for new session"""
+        # Refresh device list before checking (for monitoring purposes only)
+        await self.refresh_available_devices()
+        
         async with self._lock:
             if len(self.allocated_resources) >= self.limits.max_concurrent_sessions:
                 return False
@@ -109,14 +150,14 @@ class ResourceManager:
             if total_memory >= self.limits.max_memory_mb:
                 return False
             
-            # Check emulator availability
-            if not self.available_emulators:
-                return False
-            
+            # Note: Device availability will be checked by emulator-manager during connection
             return True
     
     async def allocate(self, session_id: str, estimated_cpu: float = 10.0, estimated_memory: int = 512) -> Optional[SessionResource]:
         """Allocate resources for session"""
+        # Refresh device list for monitoring (device assignment happens at connection time)
+        await self.refresh_available_devices()
+        
         async with self._lock:
             # Check allocation constraints without calling can_allocate() to avoid deadlock
             if len(self.allocated_resources) >= self.limits.max_concurrent_sessions:
@@ -133,23 +174,19 @@ class ResourceManager:
                 logger.warning(f"Cannot allocate: memory limit ({self.limits.max_memory_mb}MB) reached")
                 return None
             
-            if not self.available_emulators:
-                logger.warning(f"Cannot allocate: no emulators available")
-                return None
-            
-            # Allocate emulator
-            emulator_id = self.available_emulators.pop()
+            # Note: Device assignment will happen automatically when session connects
+            # based on device_mode (emulator/physical) in session config
             
             resource = SessionResource(
                 session_id=session_id,
-                emulator_id=emulator_id,
+                emulator_id=None,  # Will be assigned at connection time
                 cpu_percent=estimated_cpu,
                 memory_mb=estimated_memory,
                 started_at=datetime.utcnow()
             )
             
             self.allocated_resources[session_id] = resource
-            logger.info(f"Allocated resources for session {session_id}: {emulator_id}")
+            logger.info(f"✅ Allocated resources for session {session_id} (device will be assigned at connection)")
             return resource
     
     async def deallocate(self, session_id: str):
@@ -157,8 +194,7 @@ class ResourceManager:
         async with self._lock:
             if session_id in self.allocated_resources:
                 resource = self.allocated_resources[session_id]
-                if resource.emulator_id:
-                    self.available_emulators.add(resource.emulator_id)
+                # Note: Device cleanup happens in emulator-manager
                 del self.allocated_resources[session_id]
                 logger.info(f"Deallocated resources for session {session_id}")
     

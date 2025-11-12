@@ -379,35 +379,206 @@ CREATE TABLE version_comparisons (
     compare_version_id UUID NOT NULL REFERENCES game_versions(id) ON DELETE CASCADE,
     compared_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
+    -- Game identification (denormalized for query performance)
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    game_name VARCHAR(255),
+    base_version_name VARCHAR(100),
+    compare_version_name VARCHAR(100),
+    
     -- Bug comparison
     bugs_fixed_count INTEGER DEFAULT 0,
     bugs_introduced_count INTEGER DEFAULT 0,
     regression_bugs_count INTEGER DEFAULT 0,
+    bugs_fixed_list JSONB DEFAULT '[]'::jsonb,
+    bugs_introduced_list JSONB DEFAULT '[]'::jsonb,
     
     -- Performance comparison
     performance_change_percent FLOAT,
     crash_rate_change_percent FLOAT,
+    load_time_change_ms INTEGER,
+    memory_usage_change_mb FLOAT,
+    battery_impact_change_percent FLOAT,
     
     -- Difficulty comparison
     difficulty_change_percent FLOAT,
     levels_easier INTEGER DEFAULT 0,
     levels_harder INTEGER DEFAULT 0,
+    new_levels_added INTEGER DEFAULT 0,
+    levels_removed INTEGER DEFAULT 0,
+    difficulty_curve_analysis JSONB DEFAULT '{}'::jsonb,
     
     -- Retention comparison
     retention_change_percent FLOAT,
+    day1_retention_change FLOAT,
+    day7_retention_change FLOAT,
+    day30_retention_change FLOAT,
     
-    -- Detailed differences
+    -- UI/UX Changes
+    ui_changes JSONB DEFAULT '[]'::jsonb,  -- List of detected UI changes with screenshots
+    ux_improvements INTEGER DEFAULT 0,
+    ux_regressions INTEGER DEFAULT 0,
+    layout_changes JSONB DEFAULT '[]'::jsonb,
+    color_scheme_changes BOOLEAN DEFAULT false,
+    font_changes BOOLEAN DEFAULT false,
+    animation_changes JSONB DEFAULT '[]'::jsonb,
+    
+    -- Gameplay Changes
+    gameplay_mechanics_changes JSONB DEFAULT '[]'::jsonb,
+    progression_changes JSONB DEFAULT '{}'::jsonb,
+    economy_changes JSONB DEFAULT '{}'::jsonb,  -- Currency, pricing, rewards
+    tutorial_changes JSONB DEFAULT '{}'::jsonb,
+    controls_changes JSONB DEFAULT '[]'::jsonb,
+    
+    -- Content Changes
+    new_features JSONB DEFAULT '[]'::jsonb,
+    removed_features JSONB DEFAULT '[]'::jsonb,
+    content_additions JSONB DEFAULT '{}'::jsonb,  -- New levels, characters, items, etc.
+    content_removals JSONB DEFAULT '{}'::jsonb,
+    
+    -- Level-by-Level Analysis
+    level_comparisons JSONB DEFAULT '[]'::jsonb,  -- Detailed per-level differences
+    level_difficulty_shifts JSONB DEFAULT '{}'::jsonb,
+    level_completion_rate_changes JSONB DEFAULT '{}'::jsonb,
+    
+    -- Visual Changes
+    visual_quality_change VARCHAR(50),  -- 'improved', 'degraded', 'unchanged'
+    graphics_changes JSONB DEFAULT '[]'::jsonb,
+    screenshot_diffs JSONB DEFAULT '[]'::jsonb,  -- Side-by-side comparison images
+    
+    -- Audio Changes (if detectable)
+    audio_changes JSONB DEFAULT '[]'::jsonb,
+    
+    -- Technical Changes
+    apk_size_change_mb FLOAT,
+    min_sdk_change INTEGER,
+    target_sdk_change INTEGER,
+    permissions_added JSONB DEFAULT '[]'::jsonb,
+    permissions_removed JSONB DEFAULT '[]'::jsonb,
+    libraries_updated JSONB DEFAULT '[]'::jsonb,
+    
+    -- Monetization Changes
+    iap_changes JSONB DEFAULT '{}'::jsonb,
+    ad_placement_changes JSONB DEFAULT '[]'::jsonb,
+    pricing_changes JSONB DEFAULT '[]'::jsonb,
+    
+    -- Player Impact Assessment
+    overall_quality_score_change FLOAT,
+    player_satisfaction_prediction FLOAT,  -- -1.0 to 1.0
+    recommended_action VARCHAR(100),  -- 'approve', 'review', 'reject', 'test_more'
+    risk_level VARCHAR(50),  -- 'low', 'medium', 'high', 'critical'
+    
+    -- Detailed differences (legacy field - kept for compatibility)
     detailed_diff JSONB DEFAULT '{}'::jsonb,
     
     -- Report
     summary TEXT,
     recommendations TEXT[],
+    key_findings TEXT[],
+    executive_summary TEXT,
     
     UNIQUE(base_version_id, compare_version_id)
 );
 
 CREATE INDEX idx_version_comparisons_base_version ON version_comparisons(base_version_id);
 CREATE INDEX idx_version_comparisons_compare_version ON version_comparisons(compare_version_id);
+CREATE INDEX idx_version_comparisons_game ON version_comparisons(game_id);
+CREATE INDEX idx_version_comparisons_compared_at ON version_comparisons(compared_at DESC);
+CREATE INDEX idx_version_comparisons_risk_level ON version_comparisons(risk_level) WHERE risk_level IN ('high', 'critical');
+
+-- ============================================================================
+-- LEARNING DATA - Dataset for AI Training
+-- ============================================================================
+
+-- Learning Data: Store all gameplay data (AI and user) for building training dataset
+CREATE TABLE learning_data (
+    id BIGSERIAL,
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    game_version_id UUID NOT NULL REFERENCES game_versions(id) ON DELETE CASCADE,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    
+    -- Screenshots before and after action
+    screenshot_before_path TEXT,
+    screenshot_before_hash VARCHAR(64),
+    screenshot_after_path TEXT,
+    screenshot_after_hash VARCHAR(64),
+    
+    -- Action information
+    action_type VARCHAR(50) NOT NULL, -- tap, swipe_up, swipe_down, swipe_left, swipe_right, back, wait
+    action_params JSONB, -- Full action parameters
+    tap_x INTEGER, -- X coordinate for taps
+    tap_y INTEGER, -- Y coordinate for taps
+    
+    -- Learning mode tracking
+    is_user_action BOOLEAN DEFAULT false, -- true = user played, false = AI played
+    learning_mode VARCHAR(50) NOT NULL, -- 'auto_play' or 'user_guided'
+    
+    -- Game state and context
+    game_state JSONB, -- Extracted game state (score, level, UI elements, etc.)
+    level_identifier VARCHAR(255), -- Which level/screen this occurred in
+    detected_text TEXT, -- OCR extracted text
+    ui_elements JSONB, -- Detected UI elements
+    
+    -- Reward and outcome
+    reward FLOAT, -- Calculated reward for this action
+    success BOOLEAN, -- Whether action was successful
+    led_to_progress BOOLEAN, -- Whether action led to game progress
+    led_to_crash BOOLEAN DEFAULT false,
+    
+    -- Features for ML
+    state_features FLOAT[], -- Encoded state features for ML models
+    visual_features FLOAT[], -- Visual features from screenshots
+    
+    -- Metadata
+    device_type VARCHAR(50), -- emulator or physical
+    agent_mode VARCHAR(50), -- random, heuristic, advanced_rl
+    metadata JSONB DEFAULT '{}'::jsonb,
+    
+    -- Composite primary key including timestamp for TimescaleDB
+    PRIMARY KEY (id, timestamp)
+);
+
+-- Convert to TimescaleDB hypertable for efficient time-series queries
+SELECT create_hypertable('learning_data', 'timestamp',
+    chunk_time_interval => INTERVAL '1 day',
+    if_not_exists => TRUE
+);
+
+-- Indexes for efficient querying
+CREATE INDEX idx_learning_data_session_id ON learning_data(session_id);
+CREATE INDEX idx_learning_data_game_id ON learning_data(game_id);
+CREATE INDEX idx_learning_data_game_version_id ON learning_data(game_version_id);
+CREATE INDEX idx_learning_data_is_user_action ON learning_data(is_user_action);
+CREATE INDEX idx_learning_data_learning_mode ON learning_data(learning_mode);
+CREATE INDEX idx_learning_data_level_identifier ON learning_data(level_identifier);
+CREATE INDEX idx_learning_data_action_type ON learning_data(action_type);
+CREATE INDEX idx_learning_data_game_level ON learning_data(game_id, level_identifier);
+
+-- GIN indexes for JSONB columns
+CREATE INDEX idx_learning_data_game_state ON learning_data USING GIN(game_state);
+CREATE INDEX idx_learning_data_ui_elements ON learning_data USING GIN(ui_elements);
+CREATE INDEX idx_learning_data_metadata ON learning_data USING GIN(metadata);
+
+COMMENT ON TABLE learning_data IS 'Comprehensive gameplay dataset for AI training - stores both AI and user gameplay data';
+
+-- AI Thinking Logs: Record AI decision-making process
+CREATE TABLE ai_thinking_logs (
+    id BIGSERIAL PRIMARY KEY,
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    action_type VARCHAR(50) NOT NULL,
+    reasoning TEXT,
+    q_values JSONB,
+    epsilon FLOAT,
+    position JSONB,
+    ui_context TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX idx_ai_thinking_logs_session_id ON ai_thinking_logs(session_id);
+CREATE INDEX idx_ai_thinking_logs_timestamp ON ai_thinking_logs(timestamp DESC);
+
+COMMENT ON TABLE ai_thinking_logs IS 'Records AI decision-making reasoning and Q-values for analysis';
 
 -- ============================================================================
 -- SYSTEM & AUDIT
@@ -623,23 +794,98 @@ LEFT JOIN rl_experiences e ON g.id = e.game_id
 LEFT JOIN rl_models m ON g.id = m.game_id AND m.status = 'active'
 GROUP BY g.id, g.package_name, g.display_name;
 
--- Version comparison summary view
+-- Version comparison summary view with comprehensive details
 CREATE VIEW version_comparison_summary AS
 SELECT 
+    vc.id AS comparison_id,
     g.display_name AS game_name,
+    g.package_name,
     base_v.version_name AS base_version,
+    base_v.version_code AS base_version_code,
     comp_v.version_name AS compare_version,
+    comp_v.version_code AS compare_version_code,
+    
+    -- Bug Analysis
     vc.bugs_fixed_count,
     vc.bugs_introduced_count,
     vc.regression_bugs_count,
+    vc.bugs_fixed_list,
+    vc.bugs_introduced_list,
+    
+    -- Performance Metrics
     vc.performance_change_percent,
     vc.crash_rate_change_percent,
+    vc.load_time_change_ms,
+    vc.memory_usage_change_mb,
+    vc.battery_impact_change_percent,
+    
+    -- Difficulty & Progression
+    vc.difficulty_change_percent,
+    vc.levels_easier,
+    vc.levels_harder,
+    vc.new_levels_added,
+    vc.levels_removed,
+    vc.difficulty_curve_analysis,
+    
+    -- Retention Metrics
     vc.retention_change_percent,
-    vc.compared_at
+    vc.day1_retention_change,
+    vc.day7_retention_change,
+    vc.day30_retention_change,
+    
+    -- UI/UX Changes
+    vc.ui_changes,
+    vc.ux_improvements,
+    vc.ux_regressions,
+    vc.layout_changes,
+    vc.visual_quality_change,
+    vc.graphics_changes,
+    
+    -- Gameplay Changes
+    vc.gameplay_mechanics_changes,
+    vc.progression_changes,
+    vc.new_features,
+    vc.removed_features,
+    vc.content_additions,
+    vc.content_removals,
+    
+    -- Level Comparisons
+    vc.level_comparisons,
+    vc.level_difficulty_shifts,
+    vc.level_completion_rate_changes,
+    
+    -- Technical Changes
+    vc.apk_size_change_mb,
+    vc.min_sdk_change,
+    vc.target_sdk_change,
+    vc.permissions_added,
+    vc.permissions_removed,
+    
+    -- Monetization
+    vc.iap_changes,
+    vc.ad_placement_changes,
+    vc.pricing_changes,
+    
+    -- Overall Assessment
+    vc.overall_quality_score_change,
+    vc.player_satisfaction_prediction,
+    vc.recommended_action,
+    vc.risk_level,
+    
+    -- Reports
+    vc.executive_summary,
+    vc.key_findings,
+    vc.summary,
+    vc.recommendations,
+    
+    -- Metadata
+    vc.compared_at,
+    EXTRACT(EPOCH FROM (NOW() - vc.compared_at)) / 3600 AS hours_since_comparison
+    
 FROM version_comparisons vc
 JOIN game_versions base_v ON vc.base_version_id = base_v.id
 JOIN game_versions comp_v ON vc.compare_version_id = comp_v.id
-JOIN games g ON base_v.game_id = g.id
+JOIN games g ON vc.game_id = g.id
 ORDER BY vc.compared_at DESC;
 
 -- ============================================================================
@@ -656,7 +902,7 @@ COMMENT ON TABLE shared_knowledge IS 'Cross-game learning insights and patterns'
 COMMENT ON TABLE session_metrics IS 'Time-series performance and gameplay metrics';
 COMMENT ON TABLE screenshots IS 'All captured screenshots with extracted features';
 COMMENT ON TABLE actions IS 'All actions taken during sessions';
-COMMENT ON TABLE version_comparisons IS 'Comparison reports between game versions';
+COMMENT ON TABLE version_comparisons IS 'Comprehensive comparison reports between game versions including bugs, UI/UX changes, gameplay differences, level analysis, performance metrics, and player impact predictions';
 
 -- ============================================================================
 -- INDEXES FOR PERFORMANCE

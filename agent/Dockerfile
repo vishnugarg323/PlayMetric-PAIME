@@ -1,18 +1,13 @@
-FROM python:3.11-slim
+# Use base image with ML/CV dependencies pre-installed
+ARG BASE_IMAGE=playmetric-base-ml:latest
+FROM ${BASE_IMAGE}
 
-WORKDIR /app
-
-# Install system dependencies including Tesseract OCR
+# Install Android tools (not in base-ml)
 RUN apt-get update && apt-get install -y \
     android-tools-adb \
-    libgl1 \
-    libglib2.0-0 \
-    curl \
-    tesseract-ocr \
-    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Copy requirements and install only agent-specific dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

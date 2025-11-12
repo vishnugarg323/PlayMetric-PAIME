@@ -1,15 +1,13 @@
-FROM python:3.11-slim
+# Use base image with ADB support pre-installed
+ARG BASE_IMAGE=playmetric-base-adb:latest
+FROM ${BASE_IMAGE}
 
-WORKDIR /app
-
-# Install system dependencies including Android build tools
+# Install aapt for APK analysis (orchestrator-specific)
 RUN apt-get update && apt-get install -y \
-    android-tools-adb \
     aapt \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Copy requirements and install only orchestrator-specific dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

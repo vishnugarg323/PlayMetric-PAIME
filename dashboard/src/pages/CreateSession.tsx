@@ -2,9 +2,51 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { gamesApi, sessionsApi } from '../common/api'
-import { Play, ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Smartphone, Monitor, RefreshCw, CheckCircle2 } from 'lucide-react'
 import Button from '../components/Button'
 import Loading from '../components/Loading'
+
+// Type definitions
+interface Game {
+  id: string
+  display_name: string
+  package_name: string
+  genre: string
+  total_sessions?: number
+}
+
+interface GameVersion {
+  id: string
+  version_name: string
+  version_code: number
+  apk_size: number
+  min_sdk?: number
+  target_sdk?: number
+  metadata?: any
+}
+
+interface CreateSessionData {
+  game_id: string
+  version_id: string
+  agent_mode: string
+  config: {
+    max_duration_seconds: number
+    max_actions: number
+    enable_screenshots: boolean
+    screenshot_interval: number
+    device_mode: string
+    device_ip: string
+    learning_mode: string
+  }
+}
+
+interface SessionResponse {
+  data: {
+    session_id: string
+    status: string
+    message: string
+  }
+}
 
 export default function CreateSession() {
   const navigate = useNavigate()
@@ -16,15 +58,21 @@ export default function CreateSession() {
   const [agentMode, setAgentMode] = useState<string>('heuristic')
   const [maxDuration, setMaxDuration] = useState<number>(300)
   const [maxActions, setMaxActions] = useState<number>(1000)
+  
+  // Local state for device and mode selection (not from global store)
+  const [deviceMode, setDeviceMode] = useState<'physical' | 'emulator'>('emulator')
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
+  const [availableDevices, setAvailableDevices] = useState<any[]>([])
+  const [loadingDevices, setLoadingDevices] = useState(false)
 
-  const { data: games, isLoading: gamesLoading } = useQuery({
+  const { data: games, isLoading: gamesLoading } = useQuery<Game[]>({
     queryKey: ['games'],
-    queryFn: () => gamesApi.list().then(r => r.data),
+    queryFn: () => gamesApi.list().then((r: any) => r.data),
   })
 
-  const { data: versions, isLoading: versionsLoading } = useQuery({
+  const { data: versions, isLoading: versionsLoading } = useQuery<GameVersion[]>({
     queryKey: ['game-versions', selectedGameId],
-    queryFn: () => gamesApi.versions(selectedGameId).then(r => r.data),
+    queryFn: () => gamesApi.versions(selectedGameId).then((r: any) => r.data),
     enabled: !!selectedGameId,
   })
 
@@ -35,10 +83,38 @@ export default function CreateSession() {
     }
   }, [versions])
 
-  const createMutation = useMutation({
-    mutationFn: (data: { game_id: string; version_id: string; agent_mode: string; config: any }) =>
-      sessionsApi.create(data),
-    onSuccess: (response) => {
+  // Fetch available devices when device mode changes
+  useEffect(() => {
+    fetchAvailableDevices()
+  }, [deviceMode])
+
+  const fetchAvailableDevices = async () => {
+    setLoadingDevices(true)
+    try {
+      const API_BASE = (window as any).CONFIG?.API_BASE_URL || 'http://localhost:8000'
+      const response = await fetch(`${API_BASE}/devices/available`)
+      const data = await response.json()
+      
+      // Filter devices based on selected mode
+      const filtered = data.devices.filter((d: any) => d.device_mode === deviceMode)
+      setAvailableDevices(filtered)
+      
+      // Auto-select first device if available
+      if (filtered.length > 0 && !selectedDeviceId) {
+        setSelectedDeviceId(filtered[0].device_id)
+      }
+    } catch (error) {
+      console.error('Failed to fetch devices:', error)
+      setAvailableDevices([])
+    } finally {
+      setLoadingDevices(false)
+    }
+  }
+
+  const createMutation = useMutation<SessionResponse, Error, CreateSessionData>({
+    mutationFn: (data: CreateSessionData) =>
+      sessionsApi.create(data) as Promise<SessionResponse>,
+    onSuccess: (response: SessionResponse) => {
       // Navigate to the session details page
       // Backend returns { session_id, status, message }
       navigate(`/sessions/${response.data.session_id}`)
@@ -54,22 +130,41 @@ export default function CreateSession() {
       return
     }
 
+    // Session is created in 'pending' state without starting AI or user mode
+    // User will choose AI or User gameplay mode from session detail page
+    const config: any = {
+      max_duration_seconds: maxDuration,
+      max_actions: maxActions,
+      enable_screenshots: true,
+      screenshot_interval: 0.5, // Fast screenshot interval for quicker AI analysis
+      device_mode: deviceMode,
+      learning_mode: 'pending', // Will be set when user clicks Start AI or Start User Gameplay
+    }
+
+    // If user selected a specific device, include it
+    // Otherwise backend will auto-detect best available device
+    if (selectedDeviceId) {
+      if (deviceMode === 'physical') {
+        // Extract IP from device_id (format: IP:PORT)
+        const deviceIp = selectedDeviceId.split(':')[0]
+        config.device_ip = deviceIp
+      } else {
+        // For emulator, pass the emulator name
+        config.emulator_name = selectedDeviceId
+      }
+    }
+
     createMutation.mutate({
       game_id: selectedGameId,
       version_id: selectedVersionId,
       agent_mode: agentMode,
-      config: {
-        max_duration_seconds: maxDuration,
-        max_actions: maxActions,
-        enable_screenshots: true,
-        screenshot_interval: 5,
-      },
+      config,
     })
   }
 
   if (gamesLoading) return <Loading text="Loading games..." />
 
-  const selectedGame = games?.find(g => g.id === selectedGameId)
+  const selectedGame = games?.find((g: Game) => g.id === selectedGameId)
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -92,14 +187,14 @@ export default function CreateSession() {
           </label>
           <select
             value={selectedGameId}
-            onChange={(e) => {
+            onChange={(e: any) => {
               setSelectedGameId(e.target.value)
               setSelectedVersionId('') // Reset version when game changes
             }}
             className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             <option value="">-- Choose a game --</option>
-            {games?.map(game => (
+            {games?.map((game: Game) => (
               <option key={game.id} value={game.id}>
                 {game.display_name} ({game.package_name})
               </option>
@@ -124,10 +219,10 @@ export default function CreateSession() {
               <>
                 <select
                   value={selectedVersionId}
-                  onChange={(e) => setSelectedVersionId(e.target.value)}
+                  onChange={(e: any) => setSelectedVersionId(e.target.value)}
                   className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
                 >
-                  {versions.map(version => (
+                  {versions.map((version: GameVersion) => (
                     <option key={version.id} value={version.id}>
                       {version.version_name} (Code: {version.version_code}) - {(version.apk_size / 1024 / 1024).toFixed(2)} MB
                     </option>
@@ -135,8 +230,8 @@ export default function CreateSession() {
                 </select>
                 {selectedVersionId && (
                   <p className="mt-2 text-sm text-slate-400">
-                    {versions.find(v => v.id === selectedVersionId)?.metadata && (
-                      <>SDK: {versions.find(v => v.id === selectedVersionId)?.min_sdk} - {versions.find(v => v.id === selectedVersionId)?.target_sdk}</>
+                    {versions.find((v: GameVersion) => v.id === selectedVersionId)?.metadata && (
+                      <>SDK: {versions.find((v: GameVersion) => v.id === selectedVersionId)?.min_sdk} - {versions.find((v: GameVersion) => v.id === selectedVersionId)?.target_sdk}</>
                     )}
                   </p>
                 )}
@@ -161,7 +256,7 @@ export default function CreateSession() {
                 name="agent_mode"
                 value="heuristic"
                 checked={agentMode === 'heuristic'}
-                onChange={(e) => setAgentMode(e.target.value)}
+                onChange={(e: any) => setAgentMode(e.target.value)}
                 className="mt-1 mr-3"
               />
               <div>
@@ -177,7 +272,7 @@ export default function CreateSession() {
                 name="agent_mode"
                 value="advanced_rl"
                 checked={agentMode === 'advanced_rl'}
-                onChange={(e) => setAgentMode(e.target.value)}
+                onChange={(e: any) => setAgentMode(e.target.value)}
                 className="mt-1 mr-3"
               />
               <div>
@@ -199,7 +294,7 @@ export default function CreateSession() {
             <input
               type="number"
               value={maxDuration}
-              onChange={(e) => setMaxDuration(parseInt(e.target.value))}
+              onChange={(e: any) => setMaxDuration(parseInt(e.target.value))}
               min={30}
               max={3600}
               className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
@@ -215,7 +310,7 @@ export default function CreateSession() {
             <input
               type="number"
               value={maxActions}
-              onChange={(e) => setMaxActions(parseInt(e.target.value))}
+              onChange={(e: any) => setMaxActions(parseInt(e.target.value))}
               min={10}
               max={10000}
               className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
@@ -226,36 +321,171 @@ export default function CreateSession() {
           </div>
         </div>
 
-        {/* Device Info */}
-        <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
-          <h3 className="text-blue-400 font-semibold mb-2">📱 Physical Device Mode</h3>
-          <p className="text-sm text-slate-300 mb-2">
-            This session will run on your connected Android device. Make sure:
-          </p>
-          <ul className="text-sm text-slate-400 space-y-1 list-disc list-inside">
-            <li>Device is connected via USB and ADB is running</li>
-            <li>USB debugging is enabled on the device</li>
-            <li>Screen is unlocked during testing</li>
-            <li>You can watch your phone screen to see AI in action!</li>
-          </ul>
+        {/* Device Mode Selection */}
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-3">
+            Device Type
+          </label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label
+              className={`flex items-start p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                deviceMode === 'physical'
+                  ? 'bg-blue-900/30 border-blue-500'
+                  : 'bg-slate-700 border-slate-600 hover:border-blue-500/50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="device_mode"
+                value="physical"
+                checked={deviceMode === 'physical'}
+                onChange={(e) => setDeviceMode(e.target.value as 'physical' | 'emulator')}
+                className="mt-1 mr-3"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-2 text-white font-semibold mb-1">
+                  <Smartphone className="w-4 h-4" />
+                  Physical Device
+                </div>
+                <div className="text-sm text-slate-400">
+                  Use real Android phone via WiFi ADB
+                </div>
+              </div>
+            </label>
+
+            <label
+              className={`flex items-start p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                deviceMode === 'emulator'
+                  ? 'bg-yellow-900/30 border-yellow-500'
+                  : 'bg-slate-700 border-slate-600 hover:border-yellow-500/50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="device_mode"
+                value="emulator"
+                checked={deviceMode === 'emulator'}
+                onChange={(e) => setDeviceMode(e.target.value as 'physical' | 'emulator')}
+                className="mt-1 mr-3"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-2 text-white font-semibold mb-1">
+                  <Monitor className="w-4 h-4" />
+                  Android Emulator
+                </div>
+                <div className="text-sm text-slate-400">
+                  Use Android Studio emulator
+                </div>
+              </div>
+            </label>
+          </div>
+
+          {/* Available Devices Selection */}
+          {(deviceMode === 'physical' || deviceMode === 'emulator') && (
+            <div className="mt-3 bg-slate-900/50 border border-slate-600/50 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-slate-300">
+                  {deviceMode === 'physical' ? 'Available Physical Devices' : 'Available Emulators'}
+                </label>
+                <button
+                  onClick={fetchAvailableDevices}
+                  disabled={loadingDevices}
+                  className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-3 h-3 ${loadingDevices ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
+
+              {loadingDevices ? (
+                <div className="text-sm text-slate-400 py-2">Detecting devices...</div>
+              ) : availableDevices.length === 0 ? (
+                <div className="bg-yellow-900/20 border border-yellow-500/30 rounded p-3">
+                  <p className="text-sm text-yellow-300">
+                    ⚠️ No {deviceMode === 'physical' ? 'physical devices' : 'emulators'} detected
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {deviceMode === 'physical' 
+                      ? 'Connect a device via WiFi ADB: adb connect <IP>:5555'
+                      : 'Start Android Studio emulator on your host machine'}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {availableDevices.map((device) => (
+                    <label
+                      key={device.device_id}
+                      className={`flex items-center p-3 rounded-lg border cursor-pointer transition-all ${
+                        selectedDeviceId === device.device_id
+                          ? 'bg-green-900/30 border-green-500'
+                          : 'bg-slate-800 border-slate-600 hover:border-green-500/50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="selected_device"
+                        value={device.device_id}
+                        checked={selectedDeviceId === device.device_id}
+                        onChange={(e) => setSelectedDeviceId(e.target.value)}
+                        className="mr-3"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          {selectedDeviceId === device.device_id && (
+                            <CheckCircle2 className="w-4 h-4 text-green-400" />
+                          )}
+                          <span className="text-white font-medium">
+                            {device.model || device.device_id}
+                          </span>
+                          {device.android_version && (
+                            <span className="text-xs text-slate-400">
+                              Android {device.android_version}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          {device.device_id}
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {availableDevices.length === 0 && !loadingDevices && (
+                <div className="mt-3 text-xs text-slate-500">
+                  💡 Device will be auto-detected if you continue without selection
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Action Buttons */}
-        <div className="flex space-x-3 pt-4">
-          <Button
-            variant="ghost"
-            onClick={() => navigate('/sessions')}
-            className="flex-1"
-          >
-            Cancel
-          </Button>
+        <div className="space-y-3 pt-4">
+          {/* Single Create Session Button */}
           <Button
             onClick={handleCreate}
             disabled={!selectedGameId || !selectedVersionId || createMutation.isPending}
-            className="flex-1"
+            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
           >
-            <Play className="w-5 h-5 mr-2" />
-            {createMutation.isPending ? 'Creating...' : 'Start Session'}
+            {createMutation.isPending ? 'Creating Session...' : 'Create Session'}
+          </Button>
+
+          {/* Info Box */}
+          <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-3">
+            <p className="text-xs text-blue-300">
+              💡 After creating the session, you can choose to start AI Auto-Play or User Gameplay mode
+            </p>
+          </div>
+
+          {/* Cancel Button */}
+          <Button
+            variant="ghost"
+            onClick={() => navigate('/sessions')}
+            className="w-full"
+          >
+            Cancel
           </Button>
         </div>
       </div>

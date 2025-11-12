@@ -186,6 +186,26 @@ async def health_check():
 # GAME MANAGEMENT ENDPOINTS
 # ==============================================================================
 
+@app.get("/devices/available")
+async def list_available_devices():
+    """
+    List all available devices (emulators and physical devices)
+    Proxies request to emulator-manager service
+    """
+    try:
+        emulator_manager_url = os.getenv("EMULATOR_MANAGER_URL", "http://emulator-manager:8005")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{emulator_manager_url}/devices/available", timeout=10.0)
+            return response.json()
+    except Exception as e:
+        logger.error(f"Failed to fetch available devices: {e}")
+        return {
+            "total_devices": 0,
+            "devices": [],
+            "error": str(e)
+        }
+
+
 @app.get("/games")
 async def list_games():
     """List all games"""
@@ -531,6 +551,67 @@ async def get_session(session_id: str):
     return session
 
 
+@app.patch("/sessions/{session_id}/mode")
+async def update_session_mode(session_id: str, mode_update: dict):
+    """
+    Update session learning mode (auto_play or user_guided)
+    This allows switching between AI auto-play and user gameplay modes
+    """
+    learning_mode = mode_update.get('learning_mode')
+    
+    if learning_mode not in ['auto_play', 'user_guided']:
+        raise HTTPException(
+            status_code=400, 
+            detail="learning_mode must be 'auto_play' or 'user_guided'"
+        )
+    
+    # Update session config
+    session = await db_manager.execute_one(
+        "SELECT config FROM sessions WHERE id = $1", session_id
+    )
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Parse config
+    config = json.loads(session['config']) if isinstance(session['config'], str) else (session['config'] or {})
+    config['learning_mode'] = learning_mode
+    
+    # Update in database
+    await db_manager.execute_write(
+        "UPDATE sessions SET config = $1 WHERE id = $2",
+        json.dumps(config), session_id
+    )
+    
+    logger.info(f"Updated session {session_id} learning mode to: {learning_mode}")
+    
+    # Notify agent to switch modes
+    agent_url = os.getenv("AGENT_URL", "http://agent:8004")
+    try:
+        if learning_mode == 'user_guided':
+            # Switch to user observation mode
+            await http_client.post(
+                f"{agent_url}/play/observe",
+                json={"session_id": session_id}
+            )
+            logger.info(f"✅ Agent switched to USER OBSERVATION mode for session {session_id}")
+        else:
+            # Switch to AI auto-play mode
+            await http_client.post(
+                f"{agent_url}/play/resume"
+            )
+            logger.info(f"✅ Agent switched to AI AUTO-PLAY mode for session {session_id}")
+    except Exception as e:
+        logger.error(f"Failed to notify agent of mode change: {e}")
+        # Continue anyway - the database is updated
+    
+    return {
+        "session_id": session_id,
+        "learning_mode": learning_mode,
+        "status": "updated"
+    }
+
+
 @app.get("/sessions/{session_id}/metrics")
 async def get_session_metrics(
     session_id: str,
@@ -824,7 +905,7 @@ async def broadcast_ai_thinking(data: dict = Body(...)):
 
 @app.post("/internal/session/setup")
 async def setup_session(session_id: str):
-    """Setup session: install APK and launch app"""
+    """Setup session: connect device, install APK and launch app"""
     try:
         # Get session details
         session = await db_manager.execute_one(
@@ -849,7 +930,75 @@ async def setup_session(session_id: str):
         
         emulator_manager_url = os.getenv("EMULATOR_MANAGER_URL", "http://emulator-manager:8005")
         
-        # Install APK
+        # === STEP 1: CONNECT TO DEVICE ===
+        # Get device configuration from session config
+        config = json.loads(session.get('config', '{}')) if isinstance(session.get('config'), str) else (session.get('config') or {})
+        device_mode = config.get('device_mode', 'emulator')
+        device_ip = config.get('device_ip', None)
+        
+        logger.info(f"Connecting to device for session {session_id}: mode={device_mode}, ip={device_ip}")
+        
+        try:
+            # Get allocated device from resource manager if available
+            allocated_resource = multi_session_orchestrator.resource_manager.allocated_resources.get(session_id)
+            allocated_device_id = allocated_resource.emulator_id if allocated_resource else None
+            
+            device_config = {
+                "device_mode": device_mode,
+                "port": 5555
+            }
+            
+            if device_mode == 'physical':
+                if device_ip and device_ip != 'localhost':
+                    device_config["device_ip"] = device_ip
+                elif allocated_device_id and ':' in allocated_device_id:
+                    # Use allocated physical device (format: IP:port)
+                    device_config["device_ip"] = allocated_device_id.split(':')[0]
+                    logger.info(f"Using allocated physical device: {allocated_device_id}")
+                else:
+                    # Auto-detect first available physical device
+                    logger.info("Auto-detecting physical device...")
+                    devices_response = await http_client.get(
+                        f"{emulator_manager_url}/devices/available"
+                    )
+                    devices_data = devices_response.json()
+                    physical_devices = [d for d in devices_data.get('devices', []) if d['device_mode'] == 'physical']
+                    
+                    if physical_devices:
+                        first_device = physical_devices[0]
+                        device_ip = first_device['device_id'].split(':')[0] if ':' in first_device['device_id'] else first_device['device_id']
+                        logger.info(f"Found physical device: {first_device['device_id']} ({first_device.get('model', 'Unknown')})")
+                        device_config["device_ip"] = device_ip
+                    else:
+                        raise Exception("No physical device found. Please connect a device via ADB")
+                        
+            elif device_mode == 'emulator':
+                # Use allocated emulator if available, otherwise let emulator-manager auto-select
+                if allocated_device_id and allocated_device_id.startswith('emulator-'):
+                    device_config["emulator_name"] = allocated_device_id
+                    logger.info(f"Using allocated emulator: {allocated_device_id}")
+                else:
+                    device_config["emulator_name"] = config.get('emulator_name', None)  # Auto-select if None
+            
+            # Connect to device
+            connect_response = await http_client.post(
+                f"{emulator_manager_url}/device/connect",
+                json=device_config,
+                timeout=30.0
+            )
+            device_info = connect_response.json()
+            logger.info(f"✅ Device connected: {device_info.get('device_id')} ({device_info.get('model', 'Unknown')})")
+            
+        except Exception as e:
+            error_msg = f"Device connection failed: {str(e)}"
+            logger.error(error_msg)
+            await db_manager.execute_write(
+                "UPDATE sessions SET status = 'failed', completed_at = NOW() WHERE id = $1",
+                session_id
+            )
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+        # === STEP 2: INSTALL APK ===
         logger.info(f"Installing APK for session {session_id}: {version['apk_path']}")
         install_response = await http_client.post(
             f"{emulator_manager_url}/apk/install",
@@ -859,7 +1008,7 @@ async def setup_session(session_id: str):
         if install_response.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to install APK")
         
-        # Launch app
+        # === STEP 3: LAUNCH APP ===
         logger.info(f"Launching app: {game['package_name']}")
         launch_response = await http_client.post(
             f"{emulator_manager_url}/app/launch",
@@ -869,13 +1018,16 @@ async def setup_session(session_id: str):
         if launch_response.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to launch app")
         
-        # Update session status
+        # === STEP 4: UPDATE SESSION STATUS ===
         await db_manager.execute_write(
             "UPDATE sessions SET status = 'running', started_at = NOW() WHERE id = $1",
             session_id
         )
         
-        # Notify agent to start playing
+        # === STEP 5: START AGENT ===
+        # Pass device config to agent
+        learning_mode = config.get('learning_mode', 'auto_play')
+        
         agent_url = os.getenv("AGENT_URL", "http://agent:8004")
         await http_client.post(
             f"{agent_url}/play/start",
@@ -883,13 +1035,18 @@ async def setup_session(session_id: str):
                 "session_id": str(session_id),
                 "game_id": str(version['game_id']),
                 "package_name": game['package_name'],
-                "agent_mode": session['agent_mode']
+                "agent_mode": session['agent_mode'],
+                "learning_mode": learning_mode,
+                "device_mode": device_mode,
+                "device_ip": device_ip or "localhost"
             }
         )
         
         return {
             "status": "setup_complete",
             "session_id": session_id,
+            "device_connected": True,
+            "device_mode": device_mode,
             "apk_installed": True,
             "app_launched": True,
             "agent_started": True

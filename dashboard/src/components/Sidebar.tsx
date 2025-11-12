@@ -6,6 +6,7 @@ import {
   Play,
   BarChart3,
   Bug,
+  GitCompare,
   Settings,
   ChevronLeft,
 } from 'lucide-react'
@@ -19,6 +20,7 @@ export default function Sidebar() {
     { to: '/sessions', icon: Play, label: 'Sessions' },
     { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/bugs', icon: Bug, label: 'Bug Tracker' },
+    { to: '/version-comparison', icon: GitCompare, label: 'Version Compare' },
     { to: '/settings', icon: Settings, label: 'Settings' },
   ]
 

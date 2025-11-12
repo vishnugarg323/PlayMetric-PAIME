@@ -17,8 +17,12 @@ export default function SessionDetails() {
   const [screenshotUrl, setScreenshotUrl] = useState('')
   const [screenshotInfo, setScreenshotInfo] = useState<any>(null)
   const [latestAiAnalysis, setLatestAiAnalysis] = useState<any>(null)
+  const [learningMode, setLearningMode] = useState<string>('pending')
+  const [observationStatus, setObservationStatus] = useState<any>(null)
+  const [userObservations, setUserObservations] = useState<any[]>([])
 
-  const { data: session, isLoading, error, isError } = useQuery({
+
+  const { data: session, isLoading, error, isError, refetch } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => sessionsApi.get(sessionId!).then(r => r.data),
     enabled: !!sessionId,
@@ -51,6 +55,28 @@ export default function SessionDetails() {
         const response = await fetch('http://localhost:8004/play/status')
         const data = await response.json()
         setAiActive(data.ai_active || false)
+        setLearningMode(data.learning_mode || 'pending')
+        
+        // Get observation status if in user_guided mode
+        if (data.observation) {
+          setObservationStatus(data.observation)
+        }
+        
+        // Fetch user observations if in user_guided mode
+        if (data.learning_mode === 'user_guided') {
+          fetch('http://localhost:8004/play/user-observations?limit=20')
+            .then(r => r.json())
+            .then(obsData => setUserObservations(obsData.observations || []))
+            .catch(err => console.error('Failed to fetch user observations:', err))
+        }
+        
+        // Fetch AI decisions if in auto_play mode
+        if (data.learning_mode === 'auto_play') {
+          fetch('http://localhost:8004/play/ai-decisions?limit=20')
+            .then(r => r.json())
+            .then(decData => setUserObservations(decData.decisions || []))  // Reuse same state for now
+            .catch(err => console.error('Failed to fetch AI decisions:', err))
+        }
       } catch (error) {
         console.error('Failed to fetch AI status:', error)
       }
@@ -74,17 +100,57 @@ export default function SessionDetails() {
     }
   }, [sessionId, session?.status])
 
-  // Activate AI handler
-  const handleActivateAI = async () => {
+  // Activate AI Auto-Play Mode
+  const handleStartAIMode = async () => {
     try {
+      // Update session learning mode to 'auto_play'
+      await fetch(`http://localhost:8000/sessions/${sessionId}/mode`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ learning_mode: 'auto_play' })
+      })
+      
+      // Activate AI agent
       const response = await fetch('http://localhost:8004/play/activate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'auto_play' })
       })
       const data = await response.json()
       setAiActive(data.ai_active)
+      
+      // Refetch session to update status
+      refetch()
     } catch (error) {
-      console.error('Failed to activate AI:', error)
+      console.error('Failed to start AI Auto-Play:', error)
+      alert('Failed to start AI Auto-Play mode')
+    }
+  }
+
+  // Start User Gameplay Mode  
+  const handleStartUserMode = async () => {
+    try {
+      // Update session learning mode to 'user_guided'
+      await fetch(`http://localhost:8000/sessions/${sessionId}/mode`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ learning_mode: 'user_guided' })
+      })
+      
+      // Start observation mode (AI watches and learns from user)
+      await fetch('http://localhost:8004/play/observe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'user_guided' })
+      })
+      
+      // Refetch session to update status
+      refetch()
+      
+      alert('User Gameplay mode started! AI will observe and learn from your actions.')
+    } catch (error) {
+      console.error('Failed to start User Gameplay mode:', error)
+      alert('Failed to start User Gameplay mode')
     }
   }
 
@@ -191,19 +257,30 @@ export default function SessionDetails() {
           </span>
           {session.status === 'running' && (
             <>
-              {/* AI Control Button */}
+              {/* AI Auto-Play Button */}
               <Button
                 variant={aiActive ? "secondary" : "primary"}
                 size="sm"
-                onClick={aiActive ? handlePauseAI : handleActivateAI}
-                className={aiActive ? "bg-orange-600 hover:bg-orange-700" : ""}
+                onClick={aiActive ? handlePauseAI : handleStartAIMode}
+                className={aiActive ? "bg-orange-600 hover:bg-orange-700" : "bg-purple-600 hover:bg-purple-700"}
               >
                 {aiActive ? (
                   <>⏸️ Pause AI</>
                 ) : (
-                  <>▶️ Start AI</>
+                  <>🤖 Start AI Auto-Play</>
                 )}
               </Button>
+              
+              {/* User Gameplay Button */}
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleStartUserMode}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                👤 Start User Gameplay
+              </Button>
+              
               <Button variant="danger" size="sm">
                 <Square className="w-4 h-4 mr-2" />
                 Stop Session
@@ -358,6 +435,186 @@ export default function SessionDetails() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* User Observation Mode Status */}
+      {session.status === 'running' && learningMode === 'user_guided' && (
+        <div className="bg-gradient-to-r from-green-900/30 to-blue-900/30 rounded-lg border-2 border-green-600 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-semibold text-white flex items-center">
+              👤 User Gameplay Mode Active
+              <span className="ml-3 px-3 py-1 bg-green-600 text-white text-sm rounded-full animate-pulse">
+                ● Observing
+              </span>
+            </h2>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div className="bg-slate-900/50 rounded-lg p-4 border border-green-700/50">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-slate-300">Monitoring Status</span>
+                <Brain className="w-5 h-5 text-green-400" />
+              </div>
+              <p className={`text-2xl font-bold ${observationStatus?.is_monitoring ? 'text-green-400' : 'text-red-400'}`}>
+                {observationStatus?.is_monitoring ? '✓ Active' : '○ Inactive'}
+              </p>
+            </div>
+            
+            <div className="bg-slate-900/50 rounded-lg p-4 border border-blue-700/50">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-slate-300">User Taps Detected</span>
+                <Zap className="w-5 h-5 text-blue-400" />
+              </div>
+              <p className="text-2xl font-bold text-blue-400">
+                {observationStatus?.taps_detected || 0}
+              </p>
+            </div>
+            
+            <div className="bg-slate-900/50 rounded-lg p-4 border border-purple-700/50">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-slate-300">AI Learning</span>
+                <Activity className="w-5 h-5 text-purple-400" />
+              </div>
+              <p className="text-2xl font-bold text-purple-400">
+                {observationStatus?.is_monitoring ? '✓ Recording' : '○ Paused'}
+              </p>
+            </div>
+          </div>
+
+          {/* Recent User Actions */}
+          {observationStatus?.recent_taps && observationStatus.recent_taps.length > 0 && (
+            <div className="bg-slate-900/50 rounded-lg p-4 border border-green-700/50">
+              <h3 className="text-sm font-semibold text-green-300 mb-3 flex items-center">
+                <Zap className="w-4 h-4 mr-2" />
+                Recent User Actions (Raw Taps Detected)
+              </h3>
+              <div className="space-y-2 max-h-32 overflow-y-auto">
+                {observationStatus.recent_taps.slice().reverse().map((tap: any, idx: number) => (
+                  <div key={idx} className="flex items-center justify-between text-sm bg-slate-800/50 rounded px-3 py-2">
+                    <span className="text-green-400">👆 TAP</span>
+                    <span className="text-slate-400">
+                      Position: ({tap.x || tap[0]}, {tap.y || tap[1]})
+                    </span>
+                    <span className="text-slate-500 text-xs">
+                      {tap.timestamp ? new Date(tap.timestamp).toLocaleTimeString() : 'Just now'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* AI's Understanding of User Actions */}
+          {userObservations && userObservations.length > 0 && (
+            <div className="bg-slate-900/50 rounded-lg p-4 border border-purple-700/50 mt-4">
+              <h3 className="text-lg font-semibold text-purple-300 mb-3 flex items-center">
+                <Brain className="w-5 h-5 mr-2" />
+                🧠 What AI Learned from Your Actions (16 FPS Analysis)
+              </h3>
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {userObservations.slice().reverse().map((obs: any, idx: number) => (
+                  <div key={idx} className="bg-slate-800/70 rounded-lg p-4 border border-purple-600/30">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-2xl">
+                          {obs.user_action?.type === 'swipe' ? '👆➡️' : '👆'}
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-purple-300">
+                            {obs.user_action?.type === 'tap' 
+                              ? `Tapped at (${obs.user_action.x}, ${obs.user_action.y})`
+                              : `Swiped ${obs.user_action?.direction || 'unknown'}`
+                            }
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {obs.timestamp ? new Date(obs.timestamp).toLocaleTimeString() : 'Just now'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        {obs.led_to_progress && (
+                          <span className="px-2 py-1 bg-green-600/30 text-green-300 text-xs rounded">
+                            ✅ Progress
+                          </span>
+                        )}
+                        <span className={`px-2 py-1 text-xs rounded ${
+                          obs.outcome === 'success' 
+                            ? 'bg-green-600/30 text-green-300'
+                            : obs.outcome === 'failure'
+                            ? 'bg-red-600/30 text-red-300'
+                            : 'bg-gray-600/30 text-gray-300'
+                        }`}>
+                          {obs.outcome || 'unknown'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* AI Analysis */}
+                    {obs.ai_analysis && (
+                      <div className="mt-3 p-3 bg-slate-900/50 rounded border border-blue-700/30">
+                        <p className="text-xs font-semibold text-blue-300 mb-2">🤖 AI Analysis:</p>
+                        <div className="space-y-2 text-xs">
+                          {obs.ai_analysis.understanding && (
+                            <p className="text-green-400">
+                              � <strong>Understanding:</strong> {obs.ai_analysis.understanding}
+                            </p>
+                          )}
+                          {obs.ai_analysis.ui_context && (
+                            <p className="text-blue-400">
+                              📱 <strong>UI Context:</strong> {obs.ai_analysis.ui_context}
+                            </p>
+                          )}
+                          {obs.ai_analysis.pattern_detected && (
+                            <p className="text-purple-400">
+                              🎯 <strong>Pattern:</strong> {obs.ai_analysis.pattern_detected}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Before/After Screen State */}
+                    {(obs.screen_before || obs.screen_after) && (
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        {obs.screen_before && (
+                          <div className="p-2 bg-slate-900/50 rounded border border-slate-700/30">
+                            <p className="text-xs font-semibold text-slate-400 mb-1">Before:</p>
+                            <p className="text-xs text-slate-300">
+                              {obs.screen_before.ocr_text?.substring(0, 50) || 'No text'}
+                              {obs.screen_before.ocr_text?.length > 50 && '...'}
+                            </p>
+                          </div>
+                        )}
+                        {obs.screen_after && (
+                          <div className="p-2 bg-slate-900/50 rounded border border-slate-700/30">
+                            <p className="text-xs font-semibold text-slate-400 mb-1">After:</p>
+                            <p className="text-xs text-slate-300">
+                              {obs.screen_after.ocr_text?.substring(0, 50) || 'No text'}
+                              {obs.screen_after.ocr_text?.length > 50 && '...'}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              
+              <div className="mt-4 p-3 bg-green-900/20 rounded border border-green-700/50 text-sm text-green-300">
+                <strong>💡 Learning Summary:</strong> AI has analyzed {userObservations.length} of your actions at 16 FPS. 
+                This data will be used when AI plays in Auto-Play mode.
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 p-4 bg-blue-900/20 border border-blue-700 rounded-lg">
+            <p className="text-sm text-blue-200">
+              <strong>ℹ️ Info:</strong> The AI is currently observing your gameplay. 
+              Every tap and swipe you make is being recorded and analyzed. 
+              This data will help the AI learn how to play the game better when you switch to AI Auto-Play mode.
+            </p>
           </div>
         </div>
       )}

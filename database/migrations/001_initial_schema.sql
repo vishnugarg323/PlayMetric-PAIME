@@ -1,9 +1,3 @@
--- Migration: Initial Schema v1.0
-
-\echo 'Starting PlayMetric database migration v1.0...'
-
-BEGIN;
-
 -- PlayMetric Comprehensive Database Schema
 -- PostgreSQL 15+ with TimescaleDB for time-series data
 
@@ -709,11 +703,3 @@ CREATE INDEX idx_shared_knowledge_pattern_data ON shared_knowledge USING GIN(pat
 -- GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO playmetric_admin;
 -- GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO playmetric_service;
 
-
-
-CREATE TABLE IF NOT EXISTS schema_migrations (version VARCHAR(50) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), description TEXT);
-INSERT INTO schema_migrations (version, description) VALUES ('1.0', 'Initial schema');
-
-COMMIT;
-
-\echo 'Migration completed!'

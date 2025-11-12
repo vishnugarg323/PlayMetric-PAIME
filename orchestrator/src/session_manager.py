@@ -30,13 +30,15 @@ class Session:
         package_name: str,
         apk_path: Optional[str] = None,
         agent_mode: str = "heuristic",
-        duration_minutes: Optional[int] = None
+        duration_minutes: Optional[int] = None,
+        config: Optional[Dict] = None
     ):
         self.session_id = str(uuid.uuid4())[:8]
         self.package_name = package_name
         self.apk_path = apk_path
         self.agent_mode = agent_mode
         self.duration_minutes = duration_minutes
+        self.config = config or {}
         
         self.status = SessionStatus.CREATED
         self.created_at = datetime.now()
@@ -117,14 +119,16 @@ class SessionManager:
         package_name: str,
         apk_path: Optional[str] = None,
         agent_mode: str = "heuristic",
-        duration_minutes: Optional[int] = None
+        duration_minutes: Optional[int] = None,
+        config: Optional[Dict] = None
     ) -> Session:
         """Create a new session"""
         session = Session(
             package_name=package_name,
             apk_path=apk_path,
             agent_mode=agent_mode,
-            duration_minutes=duration_minutes
+            duration_minutes=duration_minutes,
+            config=config
         )
         
         self.sessions[session.session_id] = session

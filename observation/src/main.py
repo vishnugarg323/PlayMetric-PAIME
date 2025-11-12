@@ -13,6 +13,7 @@ import uvicorn
 
 from .adb_controller import ADBController
 from .capture import ScreenCapture
+from .user_input_monitor import UserInputMonitor
 
 # Setup logging
 logging.basicConfig(
@@ -27,6 +28,8 @@ capture: Optional[ScreenCapture] = None
 capture_task: Optional[asyncio.Task] = None
 is_capturing = False
 current_session_id = "default"
+user_input_monitor: Optional[UserInputMonitor] = None
+detected_user_taps: List[dict] = []  # Store recent user taps
 
 
 # Pydantic models
@@ -59,11 +62,15 @@ class SessionRequest(BaseModel):
     session_id: str
 
 
+class StartUserMonitoringRequest(BaseModel):
+    device_id: Optional[str] = None  # e.g., "emulator-5554" or "192.168.0.80:5555"
+
+
 # Lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global adb, capture
+    global adb, capture, user_input_monitor
     
     # Startup
     logger.info("Starting Observation Service...")
@@ -83,6 +90,11 @@ async def lifespan(app: FastAPI):
     screenshot_quality = int(os.getenv("SCREENSHOT_QUALITY", "85"))
     capture = ScreenCapture(format=screenshot_format, quality=screenshot_quality)
     
+    # Initialize user input monitor
+    device_id = f"{emulator_host}:{adb_port}"
+    user_input_monitor = UserInputMonitor(device_id=device_id)
+    logger.info(f"User input monitor initialized for device: {device_id}")
+    
     logger.info("Observation Service ready")
     
     yield
@@ -90,6 +102,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Observation Service...")
     await stop_capture()
+    
+    # Stop user input monitoring
+    if user_input_monitor:
+        await user_input_monitor.stop_monitoring()
 
 
 app = FastAPI(
@@ -308,6 +324,112 @@ async def detect_ui_elements():
     
     elements = capture.detect_ui_elements(capture.last_screenshot)
     return {"ui_elements": elements, "count": len(elements)}
+
+
+# ============================================================================
+# USER INPUT MONITORING ENDPOINTS
+# ============================================================================
+
+async def on_user_tap(x: int, y: int, event_type: str):
+    """Callback when user tap is detected"""
+    global detected_user_taps
+    
+    tap_data = {
+        'x': x,
+        'y': y,
+        'event_type': event_type,
+        'timestamp': __import__('datetime').datetime.now().isoformat(),
+        'session_id': current_session_id
+    }
+    
+    # Store in buffer (keep last 100 taps)
+    detected_user_taps.append(tap_data)
+    if len(detected_user_taps) > 100:
+        detected_user_taps.pop(0)
+    
+    logger.info(f"📝 User tap recorded: ({x}, {y}) - Total taps: {len(detected_user_taps)}")
+
+
+@app.post("/user-input/start")
+async def start_user_monitoring(request: StartUserMonitoringRequest):
+    """Start monitoring user touch inputs"""
+    global user_input_monitor
+    
+    if not user_input_monitor:
+        device_id = request.device_id or f"{os.getenv('EMULATOR_HOST', 'emulator')}:{os.getenv('ADB_PORT', '5555')}"
+        user_input_monitor = UserInputMonitor(device_id=device_id)
+    
+    if user_input_monitor.is_monitoring:
+        return {"message": "Already monitoring user inputs", "status": user_input_monitor.get_status()}
+    
+    try:
+        await user_input_monitor.start_monitoring(callback=on_user_tap)
+        return {
+            "message": "User input monitoring started",
+            "status": user_input_monitor.get_status()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start monitoring: {str(e)}")
+
+
+@app.post("/user-input/stop")
+async def stop_user_monitoring():
+    """Stop monitoring user touch inputs"""
+    global user_input_monitor
+    
+    if not user_input_monitor:
+        raise HTTPException(status_code=400, detail="No monitor instance")
+    
+    if not user_input_monitor.is_monitoring:
+        return {"message": "Not currently monitoring"}
+    
+    await user_input_monitor.stop_monitoring()
+    return {"message": "User input monitoring stopped"}
+
+
+@app.get("/user-input/status")
+async def get_monitoring_status():
+    """Get user input monitoring status"""
+    global user_input_monitor, detected_user_taps
+    
+    if not user_input_monitor:
+        return {
+            "is_monitoring": False,
+            "taps_detected": 0,
+            "recent_taps": []
+        }
+    
+    return {
+        "is_monitoring": user_input_monitor.is_monitoring,
+        "status": user_input_monitor.get_status(),
+        "taps_detected": len(detected_user_taps),
+        "recent_taps": detected_user_taps[-10:]  # Last 10 taps
+    }
+
+
+@app.get("/user-input/taps")
+async def get_detected_taps(limit: int = 50):
+    """Get detected user taps"""
+    global detected_user_taps
+    
+    return {
+        "taps": detected_user_taps[-limit:],
+        "total": len(detected_user_taps)
+    }
+
+
+@app.delete("/user-input/taps")
+async def clear_detected_taps():
+    """Clear detected taps buffer"""
+    global detected_user_taps
+    
+    count = len(detected_user_taps)
+    detected_user_taps.clear()
+    
+    return {
+        "message": f"Cleared {count} detected taps",
+        "count": count
+    }
 
 
 if __name__ == "__main__":

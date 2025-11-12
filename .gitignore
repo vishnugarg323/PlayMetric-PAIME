@@ -35,7 +35,9 @@ ENV/
 # Data directories
 data/
 !data/.gitkeep
-apks/*.apk
+
+# APKs (game files)
+apks/
 !apks/.gitkeep
 
 # Models
@@ -62,6 +64,10 @@ docker-compose.override.yml
 *.key
 *.pem
 secrets/
+
+# Environment (keep .env.example only)
+.env
+.env.local
 
 # Test outputs
 test-results/

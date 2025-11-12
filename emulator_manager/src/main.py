@@ -26,31 +26,29 @@ logger = logging.getLogger(__name__)
 
 # Global instances
 db_manager: Optional[DatabaseManager] = None
+current_device: Optional[str] = None  # Currently connected device ID
 
-# Emulator configuration
-EMULATOR_HOST = os.getenv("EMULATOR_HOST", "emulator")
-EMULATOR_PORT = os.getenv("EMULATOR_PORT", "5555")
-USE_HOST_ADB = os.getenv("USE_HOST_ADB", "false").lower() == "true"
-
-# Set ADB server host for Docker containers to connect to Windows host
-if USE_HOST_ADB:
-    os.environ["ADB_SERVER_SOCKET"] = f"tcp:192.168.137.202:5037"
-    logger.info(f"Using host ADB server at 192.168.137.202:5037")
-
-# Device address - for host ADB, just use the device serial
-if USE_HOST_ADB:
-    ADB_DEVICE = None  # Will be auto-detected from adb devices
-else:
-    ADB_DEVICE = f"{EMULATOR_HOST}:{EMULATOR_PORT}"
+# Default configuration (can be overridden per session)
+DEFAULT_EMULATOR_HOST = os.getenv("EMULATOR_HOST", "host.docker.internal")
+DEFAULT_EMULATOR_PORT = os.getenv("EMULATOR_PORT", "5555")
 
 
 # Pydantic models
+class DeviceConfig(BaseModel):
+    """Device configuration for connecting to physical device or emulator"""
+    device_mode: str  # 'physical' or 'emulator'
+    device_ip: Optional[str] = None  # For physical devices
+    emulator_name: Optional[str] = None  # For emulators (e.g., 'emulator-5554')
+    port: int = 5555
+
 class InstallAPKRequest(BaseModel):
     apk_path: str
+    device_id: Optional[str] = None  # Optional: target specific device
 
 class LaunchAppRequest(BaseModel):
     package_name: str
     activity: Optional[str] = None
+    device_id: Optional[str] = None  # Optional: target specific device
 
 class TapRequest(BaseModel):
     x: int
@@ -67,20 +65,35 @@ class TypeTextRequest(BaseModel):
     text: str
 
 
-def get_adb_base_command() -> list[str]:
-    """Get base ADB command with device selector if needed"""
-    if USE_HOST_ADB:
-        # When using host ADB server, don't specify device (or use first available)
-        return ['adb']
+def get_adb_base_command(device_id: Optional[str] = None) -> list[str]:
+    """
+    Get base ADB command with device selector if needed
+    
+    Args:
+        device_id: Specific device ID to target, or None to use current_device
+    """
+    global current_device
+    
+    target_device = device_id or current_device
+    
+    if target_device:
+        return ['adb', '-s', target_device]
     else:
-        # When using networked emulator, specify device
-        return ['adb', '-s', ADB_DEVICE]
+        # No device specified - use first available
+        return ['adb']
 
 
-def run_adb_command(command: list[str], timeout: int = 30) -> str:
-    """Run ADB command and return output"""
+def run_adb_command(command: list[str], timeout: int = 30, device_id: Optional[str] = None) -> str:
+    """
+    Run ADB command and return output
+    
+    Args:
+        command: ADB command arguments (without 'adb' prefix)
+        timeout: Command timeout in seconds
+        device_id: Specific device ID to target
+    """
     try:
-        adb_cmd = get_adb_base_command() + command
+        adb_cmd = get_adb_base_command(device_id) + command
         logger.debug(f"Running ADB command: {' '.join(adb_cmd)}")
         result = subprocess.run(
             adb_cmd,
@@ -99,45 +112,227 @@ def run_adb_command(command: list[str], timeout: int = 30) -> str:
         raise HTTPException(status_code=500, detail="ADB command timed out")
 
 
-async def wait_for_device(timeout: int = 120) -> bool:
-    """Wait for Android device to be ready"""
-    if USE_HOST_ADB:
-        logger.info("Waiting for device on host ADB server...")
-    else:
-        logger.info(f"Waiting for device {ADB_DEVICE}...")
+async def connect_device(config: DeviceConfig) -> dict:
+    """
+    Connect to a device (physical or emulator) based on configuration
     
+    Args:
+        config: Device configuration specifying mode and connection details
+        
+    Returns:
+        dict with device info and connection status
+    """
+    global current_device
+    
+    try:
+        if config.device_mode == 'physical':
+            # Physical device over network
+            if not config.device_ip:
+                raise HTTPException(status_code=400, detail="device_ip required for physical device mode")
+            
+            device_address = f"{config.device_ip}:{config.port}"
+            logger.info(f"Connecting to physical device: {device_address}")
+            
+            # Disconnect any existing connections first
+            if current_device:
+                try:
+                    subprocess.run(['adb', 'disconnect', current_device], 
+                                 capture_output=True, timeout=5)
+                    logger.info(f"Disconnected previous device: {current_device}")
+                except:
+                    pass
+            
+            # Connect to the device
+            result = subprocess.run(['adb', 'connect', device_address], 
+                                  capture_output=True, text=True, timeout=15, check=True)
+            
+            # Wait for device to be ready
+            for attempt in range(10):
+                await asyncio.sleep(2)
+                try:
+                    boot_check = subprocess.run(
+                        ['adb', '-s', device_address, 'shell', 'getprop', 'sys.boot_completed'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if boot_check.stdout.strip() == '1':
+                        current_device = device_address
+                        
+                        # Get device info
+                        model = subprocess.run(['adb', '-s', device_address, 'shell', 'getprop', 'ro.product.model'],
+                                             capture_output=True, text=True, timeout=5).stdout.strip()
+                        android_version = subprocess.run(['adb', '-s', device_address, 'shell', 'getprop', 'ro.build.version.release'],
+                                                        capture_output=True, text=True, timeout=5).stdout.strip()
+                        
+                        logger.info(f"✅ Connected to physical device: {model} (Android {android_version})")
+                        return {
+                            "status": "connected",
+                            "device_id": device_address,
+                            "device_mode": "physical",
+                            "model": model,
+                            "android_version": android_version,
+                            "connection_output": result.stdout
+                        }
+                except Exception as e:
+                    logger.debug(f"Device not ready yet (attempt {attempt + 1}/10): {e}")
+            
+            raise HTTPException(status_code=500, detail="Device connected but not ready after 20 seconds")
+            
+        elif config.device_mode == 'emulator':
+            # Android Studio emulator or local emulator
+            # First try to connect to host's emulator via host.docker.internal
+            host_emulator = f"{DEFAULT_EMULATOR_HOST}:{DEFAULT_EMULATOR_PORT}"
+            
+            logger.info(f"Attempting to connect to host emulator at {host_emulator}")
+            
+            # Disconnect previous device
+            if current_device:
+                try:
+                    subprocess.run(['adb', 'disconnect', current_device], 
+                                 capture_output=True, timeout=5)
+                    logger.info(f"Disconnected previous device: {current_device}")
+                except:
+                    pass
+            
+            # Try to connect to host emulator
+            try:
+                connect_result = subprocess.run(['adb', 'connect', host_emulator], 
+                                              capture_output=True, text=True, timeout=10)
+                logger.info(f"ADB connect result: {connect_result.stdout}")
+                
+                # Wait a bit for connection to establish
+                await asyncio.sleep(2)
+                
+                # Check if device is responding
+                devices_result = subprocess.run(['adb', 'devices'], 
+                                              capture_output=True, text=True, timeout=5)
+                
+                # Check if host emulator is connected
+                if host_emulator in devices_result.stdout and 'device' in devices_result.stdout:
+                    current_device = host_emulator
+                    
+                    # Get emulator info
+                    try:
+                        model = subprocess.run(['adb', '-s', host_emulator, 'shell', 'getprop', 'ro.product.model'],
+                                             capture_output=True, text=True, timeout=5).stdout.strip()
+                        android_version = subprocess.run(['adb', '-s', host_emulator, 'shell', 'getprop', 'ro.build.version.release'],
+                                                        capture_output=True, text=True, timeout=5).stdout.strip()
+                    except:
+                        model = "Android Emulator"
+                        android_version = "Unknown"
+                    
+                    logger.info(f"✅ Connected to host emulator: {model} (Android {android_version})")
+                    return {
+                        "status": "connected",
+                        "device_id": host_emulator,
+                        "device_mode": "emulator",
+                        "model": model,
+                        "android_version": android_version,
+                        "connection_type": "host_emulator"
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to connect to host emulator: {e}")
+            
+            # Fallback: Check for already running emulators (emulator-XXXX)
+            logger.info("Checking for running emulator instances...")
+            devices_result = subprocess.run(['adb', 'devices'], 
+                                          capture_output=True, text=True, timeout=5)
+            
+            # Parse available emulators
+            lines = devices_result.stdout.strip().split('\n')[1:]  # Skip header
+            emulators = [line.split('\t')[0] for line in lines if 'emulator-' in line and '\tdevice' in line]
+            
+            if not emulators:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"No emulators found. Please start an emulator first:\n"
+                           f"1. Start Android Studio emulator on host machine\n"
+                           f"2. Ensure emulator is accessible at {DEFAULT_EMULATOR_HOST}:{DEFAULT_EMULATOR_PORT}\n"
+                           f"3. On host, run: adb devices (should show emulator-XXXX)\n"
+                           f"Available devices: {devices_result.stdout}"
+                )
+            
+            # Use specified emulator or first available
+            if config.emulator_name:
+                if config.emulator_name not in emulators:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Emulator '{config.emulator_name}' not found. Available: {emulators}"
+                    )
+                target_emulator = config.emulator_name
+            else:
+                target_emulator = emulators[0]
+            
+            current_device = target_emulator
+            
+            # Get emulator info
+            model = subprocess.run(['adb', '-s', target_emulator, 'shell', 'getprop', 'ro.product.model'],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+            android_version = subprocess.run(['adb', '-s', target_emulator, 'shell', 'getprop', 'ro.build.version.release'],
+                                            capture_output=True, text=True, timeout=5).stdout.strip()
+            
+            logger.info(f"✅ Connected to emulator: {target_emulator} ({model}, Android {android_version})")
+            return {
+                "status": "connected",
+                "device_id": target_emulator,
+                "device_mode": "emulator",
+                "model": model,
+                "android_version": android_version,
+                "available_emulators": emulators,
+                "connection_type": "local_emulator"
+            }
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid device_mode: {config.device_mode}. Must be 'physical' or 'emulator'")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to connect device: {e}")
+        raise HTTPException(status_code=500, detail=f"Device connection failed: {str(e)}")
+
+
+async def wait_for_device(timeout: int = 120, device_id: Optional[str] = None) -> bool:
+    """
+    Wait for Android device to be ready
+    
+    Args:
+        timeout: Maximum time to wait in seconds
+        device_id: Specific device ID to wait for, or None to use current_device
+        
+    Returns:
+        bool: True if device is ready, False otherwise
+    """
+    global current_device
+    target_device = device_id or current_device
+    
+    if not target_device:
+        logger.warning("No device specified to wait for")
+        return False
+    
+    logger.info(f"Waiting for device {target_device} to be ready...")
     start_time = time.time()
     
     while time.time() - start_time < timeout:
         try:
-            if not USE_HOST_ADB:
-                # Connect to network emulator
-                subprocess.run(['adb', 'connect', ADB_DEVICE], 
-                             capture_output=True, timeout=10, check=True)
-            
-            # Check if any device is ready
-            adb_cmd = get_adb_base_command() + ['shell', 'getprop', 'sys.boot_completed']
+            # Check if device is ready
+            adb_cmd = get_adb_base_command(target_device) + ['shell', 'getprop', 'sys.boot_completed']
             result = subprocess.run(adb_cmd, capture_output=True, text=True, timeout=10)
             
             if result.stdout.strip() == '1':
-                # Get device info
-                devices_result = subprocess.run(['adb', 'devices'], 
-                                              capture_output=True, text=True, timeout=5)
-                logger.info(f"Device ready! Connected devices:\n{devices_result.stdout}")
+                logger.info(f"✅ Device {target_device} is ready!")
                 return True
         except Exception as e:
             logger.debug(f"Device not ready yet: {e}")
         
         await asyncio.sleep(5)
     
-    logger.error(f"Device not ready after {timeout}s")
+    logger.error(f"Device {target_device} not ready after {timeout}s")
     return False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global db_manager
+    global db_manager, current_device
     
     logger.info("Starting Emulator Manager Service...")
     
@@ -146,15 +341,48 @@ async def lifespan(app: FastAPI):
     await db_manager.connect()
     logger.info("Database connected")
     
-    # Wait for emulator
-    if not await wait_for_device():
-        logger.warning("Emulator not ready, but continuing...")
+    # Auto-connect to host emulator on startup (if available)
+    # This ensures the emulator is ready when sessions are created
+    try:
+        host_emulator = f"{DEFAULT_EMULATOR_HOST}:{DEFAULT_EMULATOR_PORT}"
+        logger.info(f"Attempting auto-connection to host emulator at {host_emulator}...")
+        
+        # Try to connect
+        result = subprocess.run(['adb', 'connect', host_emulator], 
+                              capture_output=True, text=True, timeout=10)
+        
+        # Wait a moment for connection to establish
+        await asyncio.sleep(2)
+        
+        # Verify connection
+        devices_result = subprocess.run(['adb', 'devices'], 
+                                      capture_output=True, text=True, timeout=5)
+        
+        if host_emulator in devices_result.stdout and 'device' in devices_result.stdout:
+            logger.info(f"✅ Auto-connected to host emulator: {host_emulator}")
+            logger.info("Emulator is ready for session creation")
+        else:
+            logger.info(f"⚠️  No emulator detected at {host_emulator}")
+            logger.info("Emulator will be connected when session is created (if available)")
+    except Exception as e:
+        logger.warning(f"Auto-connect to emulator failed (normal if emulator not running): {e}")
+        logger.info("Emulator will be connected when session is created")
     
-    logger.info("Emulator Manager Service ready")
+    logger.info("✅ Emulator Manager Service ready")
     
     yield
     
     logger.info("Shutting down Emulator Manager Service...")
+    
+    # Disconnect all devices on shutdown
+    if current_device:
+        try:
+            subprocess.run(['adb', 'disconnect', current_device], 
+                         capture_output=True, timeout=5)
+            logger.info(f"Disconnected device: {current_device}")
+        except:
+            pass
+    
     if db_manager:
         await db_manager.disconnect()
 
@@ -164,29 +392,182 @@ app = FastAPI(title="Emulator Manager", version="1.0.0", lifespan=lifespan)
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """
+    Health check endpoint - Always returns 200 OK if service is running.
+    Device connection status is informational only and does not affect health.
+    This prevents the container from showing as 'unhealthy' when device is not connected.
+    """
+    global current_device
+    
+    device_info = {
+        "status": "healthy",
+        "service": "running",
+        "timestamp": time.time(),
+        "current_device": current_device
+    }
+    
     try:
-        # Check if device is connected
-        result = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=5)
-        device_connected = ADB_DEVICE in result.stdout or 'emulator' in result.stdout
+        # Try to check ADB server status
+        result = subprocess.run(
+            ['adb', 'devices'], 
+            capture_output=True, 
+            text=True, 
+            timeout=3
+        )
+        
+        # Parse adb devices output to check for actual devices
+        lines = result.stdout.strip().split('\n')
+        devices = [line.split('\t')[0] for line in lines[1:] if '\tdevice' in line]
+        
+        device_info.update({
+            "adb_server": "running",
+            "devices_available": len(devices),
+            "device_list": devices,
+            "device_connected": current_device is not None,
+            "message": "Ready for device connections" if not current_device else f"Connected to {current_device}"
+        })
+        
+        # Check if current device is still connected
+        if current_device:
+            if current_device in devices:
+                try:
+                    boot_check = subprocess.run(
+                        get_adb_base_command(current_device) + ['shell', 'getprop', 'sys.boot_completed'],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    device_ready = boot_check.stdout.strip() == '1'
+                    device_info["current_device_ready"] = device_ready
+                except:
+                    device_info["current_device_ready"] = False
+            else:
+                device_info["current_device_ready"] = False
+                device_info["message"] = f"Warning: Current device {current_device} disconnected"
+            
+    except subprocess.TimeoutExpired:
+        device_info.update({
+            "adb_server": "timeout",
+            "devices_available": 0,
+            "message": "ADB server timeout (service healthy, check ADB configuration)"
+        })
+    except Exception as e:
+        logger.debug(f"Health check device query failed (non-critical): {e}")
+        device_info.update({
+            "adb_server": "error",
+            "devices_available": 0,
+            "error_detail": str(e),
+            "message": "Cannot query devices (service healthy, may need device connection)"
+        })
+    
+    # Always return 200 OK - service is running
+    return device_info
+
+
+@app.post("/device/connect")
+async def connect_to_device(config: DeviceConfig):
+    """
+    Connect to a device (physical or emulator) based on configuration.
+    This should be called when starting a new session.
+    
+    Example for physical device:
+    {
+        "device_mode": "physical",
+        "device_ip": "192.168.1.100",
+        "port": 5555
+    }
+    
+    Example for emulator:
+    {
+        "device_mode": "emulator",
+        "emulator_name": "emulator-5554"  // optional, will use first available if not specified
+    }
+    """
+    return await connect_device(config)
+
+
+@app.post("/device/disconnect")
+async def disconnect_device(device_id: Optional[str] = None):
+    """
+    Disconnect from current device or specific device
+    
+    Args:
+        device_id: Specific device to disconnect, or None to disconnect current device
+    """
+    global current_device
+    
+    target = device_id or current_device
+    
+    if not target:
+        return {"status": "no_device", "message": "No device connected"}
+    
+    try:
+        subprocess.run(['adb', 'disconnect', target], 
+                     capture_output=True, timeout=10, check=True)
+        
+        if target == current_device:
+            current_device = None
+        
+        logger.info(f"Disconnected device: {target}")
+        return {"status": "disconnected", "device": target}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to disconnect: {str(e)}")
+
+
+@app.get("/devices/available")
+async def list_available_devices():
+    """
+    List all available devices (both emulators and physical devices)
+    """
+    try:
+        result = subprocess.run(['adb', 'devices', '-l'], 
+                              capture_output=True, text=True, timeout=5)
+        
+        lines = result.stdout.strip().split('\n')[1:]  # Skip header
+        devices = []
+        
+        for line in lines:
+            if '\tdevice' in line:
+                parts = line.split()
+                device_id = parts[0]
+                
+                # Determine device type
+                is_emulator = 'emulator-' in device_id
+                device_mode = 'emulator' if is_emulator else 'physical'
+                
+                # Parse additional info
+                info = {
+                    "device_id": device_id,
+                    "device_mode": device_mode,
+                    "status": "available"
+                }
+                
+                # Extract model and product if available
+                for part in parts[1:]:
+                    if ':' in part:
+                        key, value = part.split(':', 1)
+                        info[key] = value
+                
+                # Try to get more details
+                try:
+                    model = subprocess.run(['adb', '-s', device_id, 'shell', 'getprop', 'ro.product.model'],
+                                         capture_output=True, text=True, timeout=2).stdout.strip()
+                    android_ver = subprocess.run(['adb', '-s', device_id, 'shell', 'getprop', 'ro.build.version.release'],
+                                                capture_output=True, text=True, timeout=2).stdout.strip()
+                    info['model'] = model
+                    info['android_version'] = android_ver
+                except:
+                    pass
+                
+                devices.append(info)
         
         return {
-            "status": "healthy" if device_connected else "emulator_not_connected",
-            "device": ADB_DEVICE,
-            "connected": device_connected
+            "total_devices": len(devices),
+            "devices": devices,
+            "current_device": current_device
         }
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
-
-
-@app.post("/emulator/connect")
-async def connect_to_emulator():
-    """Connect to emulator via ADB"""
-    try:
-        subprocess.run(['adb', 'connect', ADB_DEVICE], check=True, timeout=10)
-        return {"status": "connected", "device": ADB_DEVICE}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list devices: {str(e)}")
 
 
 @app.post("/apk/install")
@@ -403,21 +784,74 @@ async def get_screenshot_info():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/device/screen-size")
+async def get_screen_size():
+    """Get device screen dimensions (width x height)"""
+    try:
+        # Get display size
+        # Output format:
+        # "Physical size: 1440x3200"
+        # OR
+        # "Physical size: 1440x3200\nOverride size: 1080x2400"
+        display_size = run_adb_command(['shell', 'wm', 'size'])
+        
+        # Parse the output - prefer Override size if present (that's what apps see)
+        if "Override size:" in display_size:
+            size_str = display_size.split("Override size:")[1].strip()
+        elif "Physical size:" in display_size:
+            size_str = display_size.split("Physical size:")[1].strip()
+            # Remove any trailing newlines or additional text
+            size_str = size_str.split('\n')[0].strip()
+        else:
+            size_str = display_size.strip()
+        
+        # Extract width and height
+        width, height = map(int, size_str.split('x'))
+        
+        logger.info(f"📱 Device screen size: {width}x{height} (from: {display_size.strip()})")
+        
+        return {
+            "width": width,
+            "height": height,
+            "raw_output": display_size
+        }
+    except Exception as e:
+        logger.error(f"Failed to get screen size: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/device/info")
-async def get_device_info():
-    """Get device information"""
+async def get_device_info(device_id: Optional[str] = None):
+    """
+    Get device information for current device or specific device
+    
+    Args:
+        device_id: Optional specific device ID. If not provided, uses current_device
+    """
+    global current_device
+    
+    target = device_id or current_device
+    
+    if not target:
+        raise HTTPException(
+            status_code=400, 
+            detail="No device connected. Please connect a device first using POST /device/connect"
+        )
+    
     try:
         info = {
-            "device": ADB_DEVICE,
-            "android_version": run_adb_command(['shell', 'getprop', 'ro.build.version.release']),
-            "sdk_version": run_adb_command(['shell', 'getprop', 'ro.build.version.sdk']),
-            "manufacturer": run_adb_command(['shell', 'getprop', 'ro.product.manufacturer']),
-            "model": run_adb_command(['shell', 'getprop', 'ro.product.model']),
-            "display_size": run_adb_command(['shell', 'wm', 'size']),
+            "device": target,
+            "is_current_device": target == current_device,
+            "android_version": run_adb_command(['shell', 'getprop', 'ro.build.version.release'], device_id=target),
+            "sdk_version": run_adb_command(['shell', 'getprop', 'ro.build.version.sdk'], device_id=target),
+            "manufacturer": run_adb_command(['shell', 'getprop', 'ro.product.manufacturer'], device_id=target),
+            "model": run_adb_command(['shell', 'getprop', 'ro.product.model'], device_id=target),
+            "display_size": run_adb_command(['shell', 'wm', 'size'], device_id=target),
+            "boot_completed": run_adb_command(['shell', 'getprop', 'sys.boot_completed'], device_id=target)
         }
         return info
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to get device info: {str(e)}")
 
 
 if __name__ == "__main__":

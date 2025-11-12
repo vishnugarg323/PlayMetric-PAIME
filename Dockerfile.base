@@ -1,0 +1,53 @@
+# Base image with common dependencies for all PlayMetric services
+FROM python:3.11-slim as base
+
+# Install common system dependencies (curl used for healthchecks across all services)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create common directories
+RUN mkdir -p /app /data
+
+WORKDIR /app
+
+# Install common Python dependencies (used by multiple services)
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    pydantic==2.5.0 \
+    pydantic-settings==2.1.0 \
+    httpx==0.25.2 \
+    asyncpg==0.29.0 \
+    numpy==1.26.2
+
+# ============================================
+# Base image with ADB support (for services that need Android interaction)
+# ============================================
+FROM base as base-adb
+
+RUN apt-get update && apt-get install -y \
+    android-tools-adb \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================
+# Base image with CV/ML support (for agent service)
+# ============================================
+FROM base as base-ml
+
+RUN apt-get update && apt-get install -y \
+    libgl1 \
+    libglib2.0-0 \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CV/ML Python dependencies
+RUN pip install --no-cache-dir \
+    opencv-python-headless==4.8.1.78 \
+    pillow==10.1.0 \
+    torch==2.1.1 \
+    scikit-image==0.22.0 \
+    scikit-learn==1.3.2 \
+    pytesseract==0.3.10 \
+    imagehash==4.3.1

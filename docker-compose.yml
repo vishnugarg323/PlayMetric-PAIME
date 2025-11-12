@@ -1,56 +1,35 @@
 services:
   # ============================================
-  # 1. ANDROID EMULATOR (Host Machine Mode)
+  # 1. PHYSICAL DEVICE / EMULATOR CONNECTION
   # ============================================
-  # IMPORTANT: This config assumes you're running Android Studio emulator on your Windows host machine
-  # See HOST_EMULATOR_SETUP.md for setup instructions
-  # 
-  # Quick Start:
+  # PHYSICAL DEVICE (Recommended):
+  # 1. Enable USB Debugging on Android phone
+  # 2. Connect via USB: adb devices
+  # 3. Authorize on device screen
+  # 4. Enable TCP: adb tcpip 5555
+  # 5. Get device IP: adb shell ip addr show wlan0 | findstr inet
+  # 6. Connect WiFi: adb connect <IP>:5555
+  # 7. Disconnect USB (device stays connected over WiFi)
+  # 8. From Docker containers, device is accessible as: host.docker.internal:5555
+  #
+  # EMULATOR (Alternative):
   # 1. Start Android Studio emulator: emulator -avd Pixel_5_API_30 -no-window
   # 2. Enable ADB over TCP: adb tcpip 5555
-  # 3. Verify connection: adb connect localhost:5555
-  # 4. Start services: docker-compose up
+  # 3. Connect: adb connect localhost:5555
+  # 4. From Docker containers: host.docker.internal:5555
   #
-  # NOTE: Redroid emulator is commented out due to Windows Docker binderfs issues
-  # Uncomment below if running on Linux with proper kernel support
-  #
-  # emulator:
-  #   image: redroid/redroid:11.0.0-latest
-  #   container_name: playmetric-emulator
-  #   privileged: true
-  #   ports:
-  #     - "5555:5555"    # ADB
-  #   command: androidboot.use_memfd=1 androidboot.redroid_gpu_mode=guest
-  #   environment:
-  #     - REDROID_GPU_MODE=guest
-  #     - REDROID_WIDTH=1080
-  #     - REDROID_HEIGHT=1920
-  #     - REDROID_DPI=480
-  #     - REDROID_FPS=30
-  #   volumes:
-  #     - ./apks:/apks
-  #     - emulator-data:/data
-  #   networks:
-  #     - playmetric-network
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "test -e /dev/binderfs/binder || exit 1"]
-  #     interval: 15s
-  #     timeout: 10s
-  #     retries: 40
-  #     start_period: 180s
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         cpus: '${EMULATOR_CORES:-4}'
-  #         memory: ${EMULATOR_MEMORY:-3072}M
+  # NOTE: Redroid emulator doesn't work on Windows Docker (binderfs issues)
 
   # ============================================
-  # 2. EMULATOR MANAGER (Host Emulator Mode)
+  # 2. DEVICE MANAGER (Handles Physical Device / Emulator)
   # ============================================
   emulator-manager:
+    image: playmetric-emulator-manager:latest
     build:
       context: .
       dockerfile: emulator_manager/Dockerfile
+      args:
+        BASE_IMAGE: playmetric-base:latest
     container_name: playmetric-emulator-manager
     depends_on:
       postgres:
@@ -58,7 +37,9 @@ services:
     ports:
       - "8005:8005"
     environment:
-      - EMULATOR_HOST=host.docker.internal  # Connect to host machine emulator
+      # For emulators: use host.docker.internal to access host machine's emulator
+      # Physical device connections are handled dynamically via /device/connect API
+      - EMULATOR_HOST=host.docker.internal  # Always use host.docker.internal for emulator access
       - EMULATOR_PORT=5555
       - USE_HOST_ADB=false  # Connect directly to emulator, not ADB server
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -74,6 +55,7 @@ services:
       - ./apks:/apks
       - ./shared:/app/shared
       - screenshot-data:/tmp  # Shared volume for screenshots
+      - ${USERPROFILE}/.android:/root/.android:ro
     networks:
       - playmetric-network
     restart: unless-stopped
@@ -84,31 +66,15 @@ services:
       retries: 3
 
   # ============================================
-  # 2B. EMULATOR STREAM (Live View)
-  # ============================================
-  emulator-stream:
-    build:
-      context: ./emulator_stream
-      dockerfile: Dockerfile
-    container_name: playmetric-emulator-stream
-    ports:
-      - "8006:8006"
-    environment:
-      - EMULATOR_HOST=host.docker.internal  # Connect to host machine emulator
-      - ADB_PORT=5555
-      - STREAM_FPS=3
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    networks:
-      - playmetric-network
-    restart: unless-stopped
-
-  # ============================================
   # 3. OBSERVATION SERVICE
   # ============================================
   observation:
+    image: playmetric-observation:latest
     build:
       context: ./observation
       dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: playmetric-base-adb:latest
     container_name: playmetric-observation
     depends_on:
       postgres:
@@ -139,55 +105,19 @@ services:
       - playmetric-network
     restart: unless-stopped
 
-  # ============================================
-  # 3. CRASH DETECTOR
-  # ============================================
-  crash-detector:
-    build:
-      context: ./crash_detector
-      dockerfile: Dockerfile
-    container_name: playmetric-crash-detector
-    depends_on:
-      # emulator:  # Using host machine emulator
-      #   condition: service_healthy
-      postgres:
-        condition: service_healthy
-    ports:
-      - "8002:8002"
-    environment:
-      - EMULATOR_HOST=host.docker.internal  # Connect to host machine emulator
-      - ADB_PORT=${ADB_PORT:-5555}
-      - CRASH_CHECK_INTERVAL=${CRASH_CHECK_INTERVAL:-2.0}
-      - ANR_TIMEOUT=${ANR_TIMEOUT:-10}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - DB_USER=${DB_USER:-playmetric}
-      - DB_PASSWORD=${DB_PASSWORD:-playmetric123}
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=${DB_NAME:-playmetric}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    volumes:
-      - ./data/crashes:/data/crashes
-      - ./data/logs:/data/logs
-      - ./shared:/app/shared
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - playmetric-network
-    restart: unless-stopped
+
 
   # ============================================
   # 4. ANALYTICS ENGINE
   # ============================================
   analytics:
+    image: playmetric-analytics:latest
     build:
       context: ./analytics
       dockerfile: Dockerfile
     container_name: playmetric-analytics
     depends_on:
       - observation
-      - crash-detector
       - postgres
     ports:
       - "8003:8003"
@@ -217,9 +147,12 @@ services:
   # 5. AI AGENT (Advanced RL)
   # ============================================
   agent:
+    image: playmetric-agent:latest
     build:
       context: ./agent
       dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: playmetric-base-ml:latest
     container_name: playmetric-agent
     depends_on:
       - observation
@@ -234,7 +167,7 @@ services:
       - OBSERVATION_URL=http://observation:8001
       - ORCHESTRATOR_URL=http://orchestrator:8000
       - EMULATOR_MANAGER_URL=http://emulator-manager:8005
-      - EMULATOR_HOST=host.docker.internal  # Connect to host machine emulator
+      - EMULATOR_HOST=${DEVICE_IP:-host.docker.internal}  # Physical device IP
       - ADB_PORT=${ADB_PORT:-5555}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DB_USER=${DB_USER:-playmetric}
@@ -244,6 +177,8 @@ services:
       - DB_NAME=${DB_NAME:-playmetric}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      # SCREEN_WIDTH and SCREEN_HEIGHT auto-detected at session start
+      # These are only fallback defaults if detection fails
       - SCREEN_WIDTH=${SCREEN_WIDTH:-1080}
       - SCREEN_HEIGHT=${SCREEN_HEIGHT:-1920}
     volumes:
@@ -252,6 +187,7 @@ services:
       - ./shared:/app/shared
       - agent-data:/agent/data
       - screenshot-data:/tmp  # Shared volume for screenshots with emulator-manager
+      - ${USERPROFILE}/.android:/root/.android:ro  # Mount ADB keys for authorization
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -262,14 +198,16 @@ services:
   # 6. ORCHESTRATOR API
   # ============================================
   orchestrator:
+    image: playmetric-orchestrator:latest
     build:
       context: ./orchestrator
       dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: playmetric-base-adb:latest
     container_name: playmetric-orchestrator
     depends_on:
       # - emulator  # Using host machine emulator
       - observation
-      - crash-detector
       - analytics
       - agent
       - postgres
@@ -281,7 +219,6 @@ services:
       - API_PORT=${API_PORT:-8000}
       - EMULATOR_HOST=emulator
       - OBSERVATION_URL=http://observation:8001
-      - CRASH_DETECTOR_URL=http://crash-detector:8002
       - ANALYTICS_URL=http://analytics:8003
       - AGENT_URL=http://agent:8004
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -350,6 +287,7 @@ services:
   # 9. DASHBOARD (React Frontend)
   # ============================================
   dashboard:
+    image: playmetric-dashboard:latest
     build:
       context: ./dashboard
       dockerfile: Dockerfile
@@ -365,39 +303,7 @@ services:
       - playmetric-network
     restart: unless-stopped
 
-  # ============================================
-  # 10. MONITORING (Optional - Grafana + Prometheus)
-  # ============================================
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: playmetric-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    networks:
-      - playmetric-network
-    restart: unless-stopped
-    profiles:
-      - with-monitoring
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: playmetric-grafana
-    ports:
-      - "4000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - ./monitoring/grafana:/etc/grafana/provisioning
-      - grafana-data:/var/lib/grafana
-    networks:
-      - playmetric-network
-    restart: unless-stopped
-    profiles:
-      - with-monitoring
 
 networks:
   playmetric-network:
@@ -409,6 +315,4 @@ volumes:
   orchestrator-data:
   postgres-data:
   redis-data:
-  prometheus-data:
-  grafana-data:
   screenshot-data:  # Shared volume for screenshots between emulator-manager and agent

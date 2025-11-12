@@ -8,6 +8,7 @@ import CreateSession from './pages/CreateSession'
 import SessionDetails from './pages/SessionDetails'
 import Analytics from './pages/Analytics'
 import BugTracker from './pages/BugTracker'
+import VersionComparison from './pages/VersionComparison'
 import Settings from './pages/Settings'
 
 function App() {
@@ -24,6 +25,7 @@ function App() {
           <Route path="sessions/:sessionId" element={<SessionDetails />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="bugs" element={<BugTracker />} />
+          <Route path="version-comparison" element={<VersionComparison />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

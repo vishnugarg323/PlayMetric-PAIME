@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "timescaledb";
 -- ============================================================================
 
 -- Games: Master table for all games being tested
-CREATE TABLE games (
+CREATE TABLE IF NOT EXISTS games (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     package_name VARCHAR(255) UNIQUE NOT NULL,
     display_name VARCHAR(255) NOT NULL,
@@ -23,11 +23,11 @@ CREATE TABLE games (
     metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX idx_games_package_name ON games(package_name);
-CREATE INDEX idx_games_genre ON games(genre);
+CREATE INDEX IF NOT EXISTS idx_games_package_name ON games(package_name);
+CREATE INDEX IF NOT EXISTS idx_games_genre ON games(genre);
 
 -- Game Versions: Track different versions of each game
-CREATE TABLE game_versions (
+CREATE TABLE IF NOT EXISTS game_versions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     version_code INTEGER NOT NULL,
@@ -45,11 +45,11 @@ CREATE TABLE game_versions (
     UNIQUE(game_id, version_code)
 );
 
-CREATE INDEX idx_game_versions_game_id ON game_versions(game_id);
-CREATE INDEX idx_game_versions_status ON game_versions(status);
+CREATE INDEX IF NOT EXISTS idx_game_versions_game_id ON game_versions(game_id);
+CREATE INDEX IF NOT EXISTS idx_game_versions_status ON game_versions(status);
 
 -- Sessions: Individual test sessions
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     game_version_id UUID NOT NULL REFERENCES game_versions(id) ON DELETE CASCADE,
     session_name VARCHAR(255),
@@ -67,16 +67,16 @@ CREATE TABLE sessions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX idx_sessions_game_version_id ON sessions(game_version_id);
-CREATE INDEX idx_sessions_status ON sessions(status);
-CREATE INDEX idx_sessions_started_at ON sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_game_version_id ON sessions(game_version_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 
 -- ============================================================================
 -- BUG TRACKING
 -- ============================================================================
 
 -- Bugs: Track all detected issues
-CREATE TABLE bugs (
+CREATE TABLE IF NOT EXISTS bugs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     game_version_id UUID NOT NULL REFERENCES game_versions(id) ON DELETE CASCADE,
     session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
@@ -98,14 +98,14 @@ CREATE TABLE bugs (
     metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX idx_bugs_game_version_id ON bugs(game_version_id);
-CREATE INDEX idx_bugs_session_id ON bugs(session_id);
-CREATE INDEX idx_bugs_status ON bugs(status);
-CREATE INDEX idx_bugs_severity ON bugs(severity);
-CREATE INDEX idx_bugs_detected_at ON bugs(detected_at);
+CREATE INDEX IF NOT EXISTS idx_bugs_game_version_id ON bugs(game_version_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_session_id ON bugs(session_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_status ON bugs(status);
+CREATE INDEX IF NOT EXISTS idx_bugs_severity ON bugs(severity);
+CREATE INDEX IF NOT EXISTS idx_bugs_detected_at ON bugs(detected_at);
 
 -- Bug History: Track bug state changes
-CREATE TABLE bug_history (
+CREATE TABLE IF NOT EXISTS bug_history (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     bug_id UUID NOT NULL REFERENCES bugs(id) ON DELETE CASCADE,
     changed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -116,14 +116,14 @@ CREATE TABLE bug_history (
     comment TEXT
 );
 
-CREATE INDEX idx_bug_history_bug_id ON bug_history(bug_id);
+CREATE INDEX IF NOT EXISTS idx_bug_history_bug_id ON bug_history(bug_id);
 
 -- ============================================================================
 -- REINFORCEMENT LEARNING
 -- ============================================================================
 
 -- RL Experiences: Store state-action-reward transitions
-CREATE TABLE rl_experiences (
+CREATE TABLE IF NOT EXISTS rl_experiences (
     id BIGSERIAL,
     game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
@@ -160,13 +160,13 @@ SELECT create_hypertable('rl_experiences', 'timestamp',
     if_not_exists => TRUE
 );
 
-CREATE INDEX idx_rl_experiences_game_id ON rl_experiences(game_id);
-CREATE INDEX idx_rl_experiences_session_id ON rl_experiences(session_id);
-CREATE INDEX idx_rl_experiences_state_hash ON rl_experiences(state_hash);
-CREATE INDEX idx_rl_experiences_priority ON rl_experiences(priority DESC);
+CREATE INDEX IF NOT EXISTS idx_rl_experiences_game_id ON rl_experiences(game_id);
+CREATE INDEX IF NOT EXISTS idx_rl_experiences_session_id ON rl_experiences(session_id);
+CREATE INDEX IF NOT EXISTS idx_rl_experiences_state_hash ON rl_experiences(state_hash);
+CREATE INDEX IF NOT EXISTS idx_rl_experiences_priority ON rl_experiences(priority DESC);
 
 -- RL Models: Track trained models
-CREATE TABLE rl_models (
+CREATE TABLE IF NOT EXISTS rl_models (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     game_id UUID REFERENCES games(id) ON DELETE CASCADE,
     model_name VARCHAR(255) NOT NULL,
@@ -184,11 +184,11 @@ CREATE TABLE rl_models (
     UNIQUE(game_id, model_name, version)
 );
 
-CREATE INDEX idx_rl_models_game_id ON rl_models(game_id);
-CREATE INDEX idx_rl_models_status ON rl_models(status);
+CREATE INDEX IF NOT EXISTS idx_rl_models_game_id ON rl_models(game_id);
+CREATE INDEX IF NOT EXISTS idx_rl_models_status ON rl_models(status);
 
 -- Shared Knowledge: Cross-game learning insights
-CREATE TABLE shared_knowledge (
+CREATE TABLE IF NOT EXISTS shared_knowledge (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     knowledge_type VARCHAR(100) NOT NULL, -- ui_pattern, bug_pattern, strategy, etc.
     applicable_genres VARCHAR(100)[], -- Which game genres this applies to
@@ -204,15 +204,140 @@ CREATE TABLE shared_knowledge (
     metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX idx_shared_knowledge_type ON shared_knowledge(knowledge_type);
-CREATE INDEX idx_shared_knowledge_genres ON shared_knowledge USING GIN(applicable_genres);
+CREATE INDEX IF NOT EXISTS idx_shared_knowledge_type ON shared_knowledge(knowledge_type);
+CREATE INDEX IF NOT EXISTS idx_shared_knowledge_genres ON shared_knowledge USING GIN(applicable_genres);
+
+-- User Gameplay Observations: Store user gameplay actions and outcomes for learning
+CREATE TABLE IF NOT EXISTS user_gameplay_observations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    
+    -- User action data
+    user_action JSONB NOT NULL, -- {type: 'tap', x: 100, y: 200, duration: 0.5, etc.}
+    
+    -- Screen state analysis
+    screen_analysis JSONB NOT NULL, -- {ui_elements: [...], ocr_text: '...', scene_type: 'gameplay', etc.}
+    
+    -- Outcome tracking
+    outcome VARCHAR(50) NOT NULL, -- 'success', 'failure', 'neutral'
+    led_to_progress BOOLEAN DEFAULT false,
+    reward_score FLOAT DEFAULT 0.0,
+    
+    -- Additional context
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_gameplay_observations_session_id ON user_gameplay_observations(session_id);
+CREATE INDEX IF NOT EXISTS idx_user_gameplay_observations_game_id ON user_gameplay_observations(game_id);
+CREATE INDEX IF NOT EXISTS idx_user_gameplay_observations_timestamp ON user_gameplay_observations(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_user_gameplay_observations_outcome ON user_gameplay_observations(game_id, outcome, led_to_progress);
+
+-- Learning Actions: Track all learning data (user demonstrations + AI decisions)
+CREATE TABLE IF NOT EXISTS learning_actions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    game_id UUID REFERENCES games(id) ON DELETE CASCADE,
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    
+    -- Action details
+    action_type VARCHAR(50) NOT NULL,
+    action_params JSONB,
+    
+    -- Screenshots
+    screenshot_before TEXT,
+    screenshot_after TEXT,
+    
+    -- Classification
+    is_user_action BOOLEAN DEFAULT false,
+    
+    -- Outcome
+    reward FLOAT DEFAULT 0.0,
+    success BOOLEAN,
+    led_to_progress BOOLEAN DEFAULT false,
+    
+    -- Screen analysis
+    ui_elements JSONB,
+    detected_text TEXT,
+    
+    -- Additional data
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_actions_timestamp ON learning_actions(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_actions_game_id ON learning_actions(game_id);
+CREATE INDEX IF NOT EXISTS idx_learning_actions_session_id ON learning_actions(session_id);
+CREATE INDEX IF NOT EXISTS idx_learning_actions_is_user ON learning_actions(is_user_action, timestamp DESC);
+
+-- Learning Data: Comprehensive training dataset for ML/RL (used by LearningRecorder)
+-- This is the main table for ML training with rich features for RL agents, LLaVA, and pattern learning
+CREATE TABLE IF NOT EXISTS learning_data (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    
+    -- Session context
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    game_version_id UUID REFERENCES game_versions(id) ON DELETE CASCADE,
+    
+    -- Screenshots for visual learning
+    screenshot_before_path TEXT,
+    screenshot_before_hash VARCHAR(64),  -- SHA-256 for deduplication
+    screenshot_after_path TEXT,
+    screenshot_after_hash VARCHAR(64),
+    
+    -- Action taken
+    action_type VARCHAR(50) NOT NULL,  -- tap, swipe_up, swipe_down, swipe_left, swipe_right, back, etc.
+    action_params JSONB,  -- Full action parameters
+    tap_x INTEGER,  -- Quick access to tap coordinates
+    tap_y INTEGER,
+    
+    -- Learning context
+    is_user_action BOOLEAN DEFAULT false,  -- True = user demonstration, False = AI action
+    learning_mode VARCHAR(50),  -- 'auto_play', 'user_guided', 'hybrid'
+    
+    -- Game state (for RL state representation)
+    game_state JSONB,  -- Extracted game state: {level, score, health, progress, etc.}
+    level_identifier VARCHAR(255),  -- Which level/screen this happened in
+    
+    -- Screen analysis (for pattern recognition)
+    ui_elements JSONB,  -- Detected UI elements: [{type, bounds, text, clickable}, ...]
+    detected_text TEXT,  -- OCR extracted text
+    
+    -- Outcome tracking (for reward calculation)
+    reward FLOAT DEFAULT 0.0,  -- Calculated reward (-1.0 to 1.0)
+    success BOOLEAN,  -- Whether action succeeded
+    led_to_progress BOOLEAN DEFAULT false,  -- Game progress indicator
+    led_to_crash BOOLEAN DEFAULT false,  -- Crash detection
+    
+    -- ML Features (pre-computed for faster training)
+    state_features FLOAT[],  -- Encoded state vector for RL (fixed size, e.g., 128 dims)
+    visual_features FLOAT[],  -- Visual embeddings from screenshots (e.g., ResNet features)
+    
+    -- Device & agent context
+    device_type VARCHAR(50),  -- 'emulator', 'physical'
+    agent_mode VARCHAR(50),  -- 'random', 'heuristic', 'rl', 'hybrid'
+    
+    -- Additional metadata
+    metadata JSONB DEFAULT '{}'::jsonb  -- Extensible metadata
+);
+
+-- Indexes for efficient ML training queries
+CREATE INDEX IF NOT EXISTS idx_learning_data_timestamp ON learning_data(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_data_game_id ON learning_data(game_id);
+CREATE INDEX IF NOT EXISTS idx_learning_data_session_id ON learning_data(session_id);
+CREATE INDEX IF NOT EXISTS idx_learning_data_level ON learning_data(level_identifier);
+CREATE INDEX IF NOT EXISTS idx_learning_data_is_user ON learning_data(is_user_action, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_data_progress ON learning_data(led_to_progress, reward DESC);
+CREATE INDEX IF NOT EXISTS idx_learning_data_screenshot_hash ON learning_data(screenshot_before_hash);
 
 -- ============================================================================
 -- ANALYTICS & METRICS
 -- ============================================================================
 
 -- Session Metrics: Time-series metrics per session
-CREATE TABLE session_metrics (
+CREATE TABLE IF NOT EXISTS session_metrics (
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     
@@ -243,10 +368,10 @@ SELECT create_hypertable('session_metrics', 'timestamp',
     if_not_exists => TRUE
 );
 
-CREATE INDEX idx_session_metrics_session_id ON session_metrics(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_metrics_session_id ON session_metrics(session_id);
 
 -- Difficulty Analysis: Per-level difficulty scores
-CREATE TABLE difficulty_analysis (
+CREATE TABLE IF NOT EXISTS difficulty_analysis (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     level_identifier VARCHAR(255) NOT NULL,
@@ -262,11 +387,11 @@ CREATE TABLE difficulty_analysis (
     UNIQUE(session_id, level_identifier)
 );
 
-CREATE INDEX idx_difficulty_analysis_session_id ON difficulty_analysis(session_id);
-CREATE INDEX idx_difficulty_analysis_difficulty_score ON difficulty_analysis(difficulty_score DESC);
+CREATE INDEX IF NOT EXISTS idx_difficulty_analysis_session_id ON difficulty_analysis(session_id);
+CREATE INDEX IF NOT EXISTS idx_difficulty_analysis_difficulty_score ON difficulty_analysis(difficulty_score DESC);
 
 -- Retention Analysis: Estimated retention metrics
-CREATE TABLE retention_analysis (
+CREATE TABLE IF NOT EXISTS retention_analysis (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     game_version_id UUID NOT NULL REFERENCES game_versions(id) ON DELETE CASCADE,
     session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
@@ -292,11 +417,11 @@ CREATE TABLE retention_analysis (
     analysis_basis JSONB DEFAULT '{}'::jsonb -- What data this was based on
 );
 
-CREATE INDEX idx_retention_analysis_game_version_id ON retention_analysis(game_version_id);
-CREATE INDEX idx_retention_analysis_session_id ON retention_analysis(session_id);
+CREATE INDEX IF NOT EXISTS idx_retention_analysis_game_version_id ON retention_analysis(game_version_id);
+CREATE INDEX IF NOT EXISTS idx_retention_analysis_session_id ON retention_analysis(session_id);
 
 -- Screenshots: Track all captured screenshots
-CREATE TABLE screenshots (
+CREATE TABLE IF NOT EXISTS screenshots (
     id UUID DEFAULT uuid_generate_v4(),
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     file_path TEXT NOT NULL,
@@ -332,11 +457,11 @@ SELECT create_hypertable('screenshots', 'captured_at',
     if_not_exists => TRUE
 );
 
-CREATE INDEX idx_screenshots_session_id ON screenshots(session_id);
-CREATE INDEX idx_screenshots_screen_hash ON screenshots(screen_hash);
+CREATE INDEX IF NOT EXISTS idx_screenshots_session_id ON screenshots(session_id);
+CREATE INDEX IF NOT EXISTS idx_screenshots_screen_hash ON screenshots(screen_hash);
 
 -- Actions: Record all actions taken
-CREATE TABLE actions (
+CREATE TABLE IF NOT EXISTS actions (
     id BIGSERIAL,
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     executed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -366,14 +491,14 @@ SELECT create_hypertable('actions', 'executed_at',
     if_not_exists => TRUE
 );
 
-CREATE INDEX idx_actions_session_id ON actions(session_id);
+CREATE INDEX IF NOT EXISTS idx_actions_session_id ON actions(session_id);
 
 -- ============================================================================
 -- VERSION COMPARISON & REPORTING
 -- ============================================================================
 
 -- Version Comparisons: Compare metrics between versions
-CREATE TABLE version_comparisons (
+CREATE TABLE IF NOT EXISTS version_comparisons (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     base_version_id UUID NOT NULL REFERENCES game_versions(id) ON DELETE CASCADE,
     compare_version_id UUID NOT NULL REFERENCES game_versions(id) ON DELETE CASCADE,
@@ -406,15 +531,15 @@ CREATE TABLE version_comparisons (
     UNIQUE(base_version_id, compare_version_id)
 );
 
-CREATE INDEX idx_version_comparisons_base_version ON version_comparisons(base_version_id);
-CREATE INDEX idx_version_comparisons_compare_version ON version_comparisons(compare_version_id);
+CREATE INDEX IF NOT EXISTS idx_version_comparisons_base_version ON version_comparisons(base_version_id);
+CREATE INDEX IF NOT EXISTS idx_version_comparisons_compare_version ON version_comparisons(compare_version_id);
 
 -- ============================================================================
 -- SYSTEM & AUDIT
 -- ============================================================================
 
 -- Audit Log: Track all important system events
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS audit_log (
     id BIGSERIAL,
     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     event_type VARCHAR(100) NOT NULL, -- session_started, bug_detected, model_trained, etc.
@@ -434,11 +559,11 @@ SELECT create_hypertable('audit_log', 'timestamp',
     if_not_exists => TRUE
 );
 
-CREATE INDEX idx_audit_log_event_type ON audit_log(event_type);
-CREATE INDEX idx_audit_log_entity_type_id ON audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity_type_id ON audit_log(entity_type, entity_id);
 
 -- System Config: Store system-wide configuration
-CREATE TABLE system_config (
+CREATE TABLE IF NOT EXISTS system_config (
     key VARCHAR(255) PRIMARY KEY,
     value JSONB NOT NULL,
     description TEXT,
@@ -451,7 +576,7 @@ CREATE TABLE system_config (
 -- ============================================================================
 
 -- Game statistics summary
-CREATE MATERIALIZED VIEW game_statistics AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS game_statistics AS
 SELECT 
     g.id AS game_id,
     g.package_name,
@@ -473,7 +598,7 @@ GROUP BY g.id, g.package_name, g.display_name;
 CREATE UNIQUE INDEX idx_game_statistics_game_id ON game_statistics(game_id);
 
 -- Version statistics summary
-CREATE MATERIALIZED VIEW version_statistics AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS version_statistics AS
 SELECT 
     gv.id AS version_id,
     gv.game_id,
@@ -507,10 +632,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Apply trigger to relevant tables
-CREATE TRIGGER update_games_updated_at BEFORE UPDATE ON games
+CREATE OR REPLACE TRIGGER update_games_updated_at BEFORE UPDATE ON games
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_shared_knowledge_updated_at BEFORE UPDATE ON shared_knowledge
+CREATE OR REPLACE TRIGGER update_shared_knowledge_updated_at BEFORE UPDATE ON shared_knowledge
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Function to automatically create bug history entry
@@ -533,7 +658,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER track_bug_changes AFTER UPDATE ON bugs
+CREATE OR REPLACE TRIGGER track_bug_changes AFTER UPDATE ON bugs
     FOR EACH ROW EXECUTE FUNCTION log_bug_changes();
 
 -- Function to refresh materialized views
@@ -564,7 +689,7 @@ ON CONFLICT (key) DO NOTHING;
 -- ============================================================================
 
 -- Active sessions view
-CREATE VIEW active_sessions_view AS
+CREATE OR REPLACE VIEW active_sessions_view AS
 SELECT 
     s.id,
     s.session_name,
@@ -584,7 +709,7 @@ WHERE s.status IN ('pending', 'running')
 ORDER BY s.started_at DESC;
 
 -- Recent bugs view
-CREATE VIEW recent_bugs_view AS
+CREATE OR REPLACE VIEW recent_bugs_view AS
 SELECT 
     b.id,
     b.title,
@@ -602,7 +727,7 @@ WHERE b.detected_at > NOW() - INTERVAL '30 days'
 ORDER BY b.detected_at DESC;
 
 -- RL training readiness view
-CREATE VIEW rl_training_readiness AS
+CREATE OR REPLACE VIEW rl_training_readiness AS
 SELECT 
     g.id AS game_id,
     g.package_name,
@@ -624,7 +749,7 @@ LEFT JOIN rl_models m ON g.id = m.game_id AND m.status = 'active'
 GROUP BY g.id, g.package_name, g.display_name;
 
 -- Version comparison summary view
-CREATE VIEW version_comparison_summary AS
+CREATE OR REPLACE VIEW version_comparison_summary AS
 SELECT 
     g.display_name AS game_name,
     base_v.version_name AS base_version,
@@ -663,15 +788,15 @@ COMMENT ON TABLE version_comparisons IS 'Comparison reports between game version
 -- ============================================================================
 
 -- Additional performance indexes
-CREATE INDEX idx_sessions_game_version_status ON sessions(game_version_id, status);
-CREATE INDEX idx_bugs_game_version_status_severity ON bugs(game_version_id, status, severity);
-CREATE INDEX idx_rl_experiences_game_timestamp ON rl_experiences(game_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_game_version_status ON sessions(game_version_id, status);
+CREATE INDEX IF NOT EXISTS idx_bugs_game_version_status_severity ON bugs(game_version_id, status, severity);
+CREATE INDEX IF NOT EXISTS idx_rl_experiences_game_timestamp ON rl_experiences(game_id, timestamp DESC);
 
 -- GIN indexes for JSONB columns
-CREATE INDEX idx_games_metadata ON games USING GIN(metadata);
-CREATE INDEX idx_sessions_config ON sessions USING GIN(config);
-CREATE INDEX idx_rl_experiences_metadata ON rl_experiences USING GIN(metadata);
-CREATE INDEX idx_shared_knowledge_pattern_data ON shared_knowledge USING GIN(pattern_data);
+CREATE INDEX IF NOT EXISTS idx_games_metadata ON games USING GIN(metadata);
+CREATE INDEX IF NOT EXISTS idx_sessions_config ON sessions USING GIN(config);
+CREATE INDEX IF NOT EXISTS idx_rl_experiences_metadata ON rl_experiences USING GIN(metadata);
+CREATE INDEX IF NOT EXISTS idx_shared_knowledge_pattern_data ON shared_knowledge USING GIN(pattern_data);
 
 -- ============================================================================
 -- CLEANUP POLICIES

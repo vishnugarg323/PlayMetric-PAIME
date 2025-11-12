@@ -1,5 +1,5 @@
 # Base image with common dependencies for all PlayMetric services
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 # Install common system dependencies (curl used for healthchecks across all services)
 RUN apt-get update && apt-get install -y \
@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir \
 # ============================================
 # Base image with ADB support (for services that need Android interaction)
 # ============================================
-FROM base as base-adb
+FROM base AS base-adb
 
 RUN apt-get update && apt-get install -y \
     android-tools-adb \
@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y \
 # ============================================
 # Base image with CV/ML support (for agent service)
 # ============================================
-FROM base as base-ml
+FROM base AS base-ml
 
 RUN apt-get update && apt-get install -y \
     libgl1 \

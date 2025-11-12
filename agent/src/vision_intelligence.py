@@ -139,20 +139,38 @@ Respond in JSON format. [/INST]"""
             if torch.cuda.is_available():
                 inputs = {k: v.to("cuda") for k, v in inputs.items()}
             
-            # Generate
+            # Generate with hidden states for embeddings
             with torch.no_grad():
+                # Generate text response
                 output = model.generate(**inputs, max_new_tokens=512)
+                
+                # Extract visual embeddings from vision encoder
+                # Get image embeddings from the model's vision tower
+                vision_outputs = model.vision_tower(inputs['pixel_values'])
+                if hasattr(vision_outputs, 'last_hidden_state'):
+                    visual_hidden_states = vision_outputs.last_hidden_state
+                elif hasattr(vision_outputs, 'hidden_states'):
+                    visual_hidden_states = vision_outputs.hidden_states[-1]
+                else:
+                    visual_hidden_states = vision_outputs
+                
+                # Pool visual features to fixed-size embedding (mean pooling)
+                visual_embedding = visual_hidden_states.mean(dim=[0, 1]).cpu().numpy()
+                visual_features = visual_embedding.tolist()
+                
+                logger.debug(f"✅ Extracted {len(visual_features)}-dimensional visual embedding")
             
             # Decode response
             response_text = processor.decode(output[0], skip_special_tokens=True)
             
-            logger.info(f"✅ LLaVA analysis complete")
+            logger.info(f"✅ LLaVA analysis complete with visual embeddings")
             
             # Parse response (simplified - should parse JSON)
             return {
                 "scene_type": "gameplay",
                 "game_context": response_text,
                 "recommended_action": {"action": "tap", "confidence": 0.7},
+                "visual_features": visual_features,  # NEW: Visual embeddings for ML training
                 "raw_response": response_text
             }
             

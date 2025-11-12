@@ -234,6 +234,50 @@ CREATE INDEX IF NOT EXISTS idx_user_gameplay_observations_game_id ON user_gamepl
 CREATE INDEX IF NOT EXISTS idx_user_gameplay_observations_timestamp ON user_gameplay_observations(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_user_gameplay_observations_outcome ON user_gameplay_observations(game_id, outcome, led_to_progress);
 
+-- AI Decisions: Track AI decision-making process for investor demo and learning
+CREATE TABLE IF NOT EXISTS ai_decisions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    game_id UUID REFERENCES games(id) ON DELETE CASCADE,
+    sequence_number INTEGER NOT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    
+    -- Agent details
+    agent_type VARCHAR(100) NOT NULL,
+    
+    -- Screen state when decision was made
+    screenshot_path TEXT,
+    screen_analysis JSONB,
+    
+    -- Decision process
+    available_actions JSONB,
+    reasoning TEXT NOT NULL,
+    decision_factors JSONB,
+    
+    -- Chosen action
+    chosen_action JSONB NOT NULL,
+    action_source VARCHAR(50) NOT NULL,  -- 'user_demonstration', 'learned_experience', 'exploration', 'vision_analysis'
+    confidence_score FLOAT DEFAULT 0.5,
+    
+    -- Timing
+    decision_time_ms INTEGER,
+    
+    -- Outcome (updated after action execution)
+    action_executed BOOLEAN DEFAULT false,
+    execution_error TEXT,
+    execution_time_ms INTEGER,
+    outcome JSONB,
+    reward_signal FLOAT,
+    was_successful BOOLEAN,
+    led_to_progress BOOLEAN
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_decisions_session_id ON ai_decisions(session_id);
+CREATE INDEX IF NOT EXISTS idx_ai_decisions_game_id ON ai_decisions(game_id);
+CREATE INDEX IF NOT EXISTS idx_ai_decisions_timestamp ON ai_decisions(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_decisions_action_source ON ai_decisions(action_source);
+CREATE INDEX IF NOT EXISTS idx_ai_decisions_confidence ON ai_decisions(confidence_score DESC);
+
 -- Learning Actions: Track all learning data (user demonstrations + AI decisions)
 CREATE TABLE IF NOT EXISTS learning_actions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

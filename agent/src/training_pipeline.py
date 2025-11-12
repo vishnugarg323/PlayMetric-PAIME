@@ -101,7 +101,7 @@ class TrainingPipeline:
         try:
             query = """
                 SELECT COUNT(*) as count
-                FROM learning_actions
+                FROM learning_data
                 WHERE timestamp > $1
             """
             
@@ -194,16 +194,21 @@ class TrainingPipeline:
             stats['error'] = str(e)
             return stats
     
-    async def _load_training_experiences(self) -> list:
-        """Load recent experiences for training"""
+    async def _load_experiences(self) -> list:
+        """Load recent experiences from database"""
         try:
             query = """
                 SELECT 
-                    session_id, game_id, action_type, action_params,
-                    screenshot_before, screenshot_after,
-                    is_user_action, game_state, reward, success,
-                    led_to_progress, ui_elements, detected_text
-                FROM learning_actions
+                    session_id, game_id, game_version_id,
+                    action_type, action_params, tap_x, tap_y,
+                    screenshot_before_path, screenshot_after_path,
+                    is_user_action, learning_mode,
+                    game_state, level_identifier, ui_elements, detected_text,
+                    reward, success, led_to_progress,
+                    state_features, visual_features,
+                    device_type, agent_mode, metadata,
+                    timestamp
+                FROM learning_data
                 WHERE timestamp > NOW() - INTERVAL '1 day'
                 ORDER BY timestamp DESC
                 LIMIT 1000

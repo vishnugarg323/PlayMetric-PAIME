@@ -356,6 +356,26 @@ async def play_loop():
             else:
                 current_state = None
             
+            # === EXTRACT STATE FEATURES FOR ML TRAINING ===
+            state_features = None
+            if isinstance(agent, AdvancedRLAgent) and screenshot:
+                try:
+                    state_features = agent.feature_extractor.extract_from_analysis(
+                        screenshot_path=screenshot,
+                        ocr_data=ocr_data,
+                        ui_elements=ui_elements
+                    )
+                    logger.debug(f"✅ Extracted {len(state_features)} state features")
+                except Exception as e:
+                    logger.warning(f"Failed to extract state features: {e}")
+                    state_features = None
+            
+            # === EXTRACT VISUAL FEATURES FROM LLAVA ===
+            visual_features = None
+            if vision_analysis and 'visual_features' in vision_analysis:
+                visual_features = vision_analysis['visual_features']
+                logger.debug(f"✅ Extracted {len(visual_features)} visual features from LLaVA")
+            
             # === NEW: ADVANCED REWARD CALCULATION ===
             if reward_system and last_state is not None:
                 # Build before/after state for reward calculation
@@ -684,6 +704,65 @@ async def play_loop():
                     "timestamp": __import__('datetime').datetime.now().isoformat()
                 })
             
+            # === RECORD AI DECISION FOR INVESTOR DEMO ===
+            if decision_recorder and current_session_id and current_game_id and learning_mode == 'auto_play':
+                try:
+                    # Determine action source
+                    if user_demo_recommendation:
+                        action_source = 'user_demonstration'
+                        reasoning = user_demo_recommendation.get('reasoning', 'Learned from user')
+                        confidence = user_demo_recommendation.get('confidence', 0.8)
+                    elif advanced_recommendation:
+                        action_source = 'vision_analysis'
+                        reasoning = advanced_recommendation.get('reasoning', 'Computer vision analysis')
+                        confidence = advanced_recommendation.get('confidence', 0.7)
+                    elif vision_analysis:
+                        action_source = 'vision_analysis'
+                        reasoning = vision_analysis.get('game_context', 'LLaVA vision AI analysis')
+                        confidence = 0.75
+                    elif smart_recommendation:
+                        action_source = 'learned_experience'
+                        reasoning = smart_recommendation.get('reasoning', 'Smart game intelligence')
+                        confidence = 0.6
+                    else:
+                        action_source = 'exploration'
+                        reasoning = f'Exploring with {agent.__class__.__name__}'
+                        confidence = 0.5
+                    
+                    # Record the decision
+                    await decision_recorder.record_ai_decision(
+                        session_id=current_session_id,
+                        game_id=current_game_id,
+                        agent_type=agent.__class__.__name__,
+                        screenshot_path=screenshot,
+                        screen_analysis={
+                            'ocr_text': ocr_data.get('text', ''),
+                            'ui_elements_count': len(ui_elements),
+                            'ui_elements': ui_elements[:5],  # First 5 elements
+                            'scene_type': vision_analysis.get('scene_type') if vision_analysis else 'unknown',
+                            'screen_changed': screenshot_comparison.get('changed_significantly', False)
+                        },
+                        reasoning=reasoning,
+                        chosen_action={
+                            'type': action.action_type.value,
+                            'x': action.x,
+                            'y': action.y,
+                            'coordinates': [action.x, action.y]
+                        },
+                        action_source=action_source,
+                        available_actions=None,  # Could add alternative actions here
+                        decision_factors={
+                            'reward_estimate': reward if last_state is not None else 0.0,
+                            'screen_changed_recently': screenshot_comparison.get('changed_significantly', False),
+                            'ui_elements_detected': len(ui_elements),
+                            'ocr_detected': bool(ocr_data.get('text'))
+                        },
+                        confidence_score=confidence
+                    )
+                    logger.debug(f"📊 Recorded AI decision: {action_source} with {confidence:.1%} confidence")
+                except Exception as e:
+                    logger.warning(f"Failed to record AI decision: {e}")
+            
             # === EXECUTE ACTION (only in AI mode) ===
             screenshot_before = screenshot  # Store screenshot before action
             
@@ -728,6 +807,8 @@ async def play_loop():
                         agent_mode=agent.__class__.__name__.lower(),
                         ui_elements=ui_elements,
                         detected_text=ocr_data.get('text'),
+                        state_features=state_features.tolist() if state_features is not None else None,
+                        visual_features=visual_features if visual_features else None,
                         metadata={'episode_reward': episode_reward}
                     )
             else:
@@ -770,6 +851,8 @@ async def play_loop():
                                     agent_mode='user',
                                     ui_elements=ui_elements,
                                     detected_text=ocr_data.get('text'),
+                                    state_features=state_features.tolist() if state_features is not None else None,
+                                    visual_features=visual_features if visual_features else None,
                                     metadata={'observation_mode': True}
                                 )
                                 

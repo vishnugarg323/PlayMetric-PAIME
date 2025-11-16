@@ -376,6 +376,25 @@ CREATE INDEX IF NOT EXISTS idx_learning_data_is_user ON learning_data(is_user_ac
 CREATE INDEX IF NOT EXISTS idx_learning_data_progress ON learning_data(led_to_progress, reward DESC);
 CREATE INDEX IF NOT EXISTS idx_learning_data_screenshot_hash ON learning_data(screenshot_before_hash);
 
+-- AI Thinking Logs: Record AI decision-making process
+CREATE TABLE IF NOT EXISTS ai_thinking_logs (
+    id BIGSERIAL PRIMARY KEY,
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    action_type VARCHAR(50) NOT NULL,
+    reasoning TEXT,
+    q_values JSONB,
+    epsilon FLOAT,
+    position JSONB,
+    ui_context TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_thinking_logs_session_id ON ai_thinking_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_ai_thinking_logs_timestamp ON ai_thinking_logs(timestamp DESC);
+
+COMMENT ON TABLE ai_thinking_logs IS 'Records AI decision-making reasoning and Q-values for analysis';
+
 -- ============================================================================
 -- ANALYTICS & METRICS
 -- ============================================================================
@@ -639,7 +658,7 @@ LEFT JOIN sessions s ON gv.id = s.game_version_id
 LEFT JOIN bugs b ON gv.id = b.game_version_id
 GROUP BY g.id, g.package_name, g.display_name;
 
-CREATE UNIQUE INDEX idx_game_statistics_game_id ON game_statistics(game_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_game_statistics_game_id ON game_statistics(game_id);
 
 -- Version statistics summary
 CREATE MATERIALIZED VIEW IF NOT EXISTS version_statistics AS
@@ -660,7 +679,7 @@ LEFT JOIN sessions s ON gv.id = s.game_version_id
 LEFT JOIN bugs b ON gv.id = b.game_version_id
 GROUP BY gv.id, gv.game_id, gv.version_name;
 
-CREATE UNIQUE INDEX idx_version_statistics_version_id ON version_statistics(version_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_version_statistics_version_id ON version_statistics(version_id);
 
 -- ============================================================================
 -- FUNCTIONS & TRIGGERS

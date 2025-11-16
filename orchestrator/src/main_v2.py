@@ -1016,7 +1016,9 @@ async def setup_session(session_id: str):
         )
         
         if launch_response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to launch app")
+            error_detail = launch_response.text
+            logger.error(f"Failed to launch app. Status: {launch_response.status_code}, Response: {error_detail}")
+            raise HTTPException(status_code=500, detail=f"Failed to launch app: {error_detail}")
         
         # === STEP 4: UPDATE SESSION STATUS ===
         await db_manager.execute_write(
@@ -1055,7 +1057,12 @@ async def setup_session(session_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error setting up session: {e}")
+        logger.error(f"Error setting up session: {e}", exc_info=True)
+        await db_manager.execute_write(
+            "UPDATE sessions SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1",
+            session_id,
+            str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -80,22 +80,48 @@ async def lifespan(app: FastAPI):
     adb_port = int(os.getenv("ADB_PORT", "5555"))
     adb = ADBController(host=emulator_host, port=adb_port)
     
-    # Connect to emulator
+    # Auto-detect and connect to devices
+    logger.info("🔍 Auto-connecting to available devices...")
+    import subprocess
+    
+    # Try common device addresses
+    device_addresses = [
+        f"{emulator_host}:{adb_port}",  # Default emulator
+        "host.docker.internal:5555",     # Host emulator
+        "192.168.0.80:5555",             # Physical device
+    ]
+    
+    connected = False
+    for addr in device_addresses:
+        try:
+            logger.info(f"Trying {addr}...")
+            result = subprocess.run(
+                ['adb', 'connect', addr],
+                capture_output=True, text=True, timeout=3
+            )
+            if 'connected' in result.stdout.lower() or 'already connected' in result.stdout.lower():
+                logger.info(f"✅ Connected to {addr}")
+                connected = True
+                await asyncio.sleep(1)
+        except:
+            pass
+    
+    # Connect to emulator (original logic)
     logger.info(f"Connecting to emulator at {emulator_host}:{adb_port}")
     if not adb.connect():
-        logger.error("Failed to connect to emulator")
+        logger.warning("Default ADB connection failed, but devices may still be available via TCP")
     
     # Initialize screen capture
     screenshot_format = os.getenv("SCREENSHOT_FORMAT", "png")
     screenshot_quality = int(os.getenv("SCREENSHOT_QUALITY", "85"))
     capture = ScreenCapture(format=screenshot_format, quality=screenshot_quality)
     
-    # Initialize user input monitor
+    # Initialize user input monitor (will use first available device)
     device_id = f"{emulator_host}:{adb_port}"
     user_input_monitor = UserInputMonitor(device_id=device_id)
     logger.info(f"User input monitor initialized for device: {device_id}")
     
-    logger.info("Observation Service ready")
+    logger.info("✅ Observation Service ready")
     
     yield
     

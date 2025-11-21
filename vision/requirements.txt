@@ -1,0 +1,5 @@
+# Vision-specific dependencies (base-ml already has: fastapi, uvicorn, torch, Pillow)
+transformers==4.46.2
+accelerate==1.1.1
+easyocr==1.7.2
+google-generativeai==0.3.2

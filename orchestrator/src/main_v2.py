@@ -94,8 +94,8 @@ async def lifespan(app: FastAPI):
     version_tracker = VersionTracker(db_manager)
     logger.info("Version tracker initialized")
     
-    # HTTP client
-    http_client = httpx.AsyncClient(timeout=30.0)
+    # HTTP client (increased timeout for slow APK installations on Android 16)
+    http_client = httpx.AsyncClient(timeout=120.0)
     
     logger.info("Orchestrator Service V2 ready")
     
@@ -532,12 +532,46 @@ async def start_session(session_id: str):
 async def stop_session(session_id: str):
     """Stop a running session"""
     await multi_session_orchestrator.cancel_session(session_id)
-    
+
     return {
         "session_id": session_id,
         "status": "stopped",
         "message": "Session stopped successfully"
     }
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a session and all related data"""
+    try:
+        session = await db_manager.execute_one(
+            "SELECT status FROM sessions WHERE id = $1", session_id
+        )
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        if session['status'] == 'running':
+            await multi_session_orchestrator.cancel_session(session_id)
+            logger.info(f"Cancelled running session {session_id} before deletion")
+
+        await db_manager.execute_write(
+            "DELETE FROM sessions WHERE id = $1",
+            session_id
+        )
+
+        logger.info(f"Session {session_id} deleted successfully")
+
+        return {
+            "session_id": session_id,
+            "status": "deleted",
+            "message": "Session and all related data deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
 
 
 @app.get("/sessions/{session_id}")

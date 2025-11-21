@@ -126,12 +126,7 @@ async def connect_device(config: DeviceConfig) -> dict:
     
     try:
         if config.device_mode == 'physical':
-            # Physical device over network
-            if not config.device_ip:
-                raise HTTPException(status_code=400, detail="device_ip required for physical device mode")
-            
-            device_address = f"{config.device_ip}:{config.port}"
-            logger.info(f"Connecting to physical device: {device_address}")
+            # Physical device - handle both direct IP and USB-connected devices
             
             # Disconnect any existing connections first
             if current_device:
@@ -142,40 +137,123 @@ async def connect_device(config: DeviceConfig) -> dict:
                 except:
                     pass
             
-            # Connect to the device
-            result = subprocess.run(['adb', 'connect', device_address], 
-                                  capture_output=True, text=True, timeout=15, check=True)
+            # If device_ip is provided, connect directly via TCP
+            if config.device_ip:
+                device_address = f"{config.device_ip}:{config.port}"
+                logger.info(f"Connecting to physical device via TCP: {device_address}")
+                
+                # Connect to the device
+                result = subprocess.run(['adb', 'connect', device_address], 
+                                      capture_output=True, text=True, timeout=15, check=True)
+                
+                # Wait for device to be ready
+                for attempt in range(10):
+                    await asyncio.sleep(2)
+                    try:
+                        boot_check = subprocess.run(
+                            ['adb', '-s', device_address, 'shell', 'getprop', 'sys.boot_completed'],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if boot_check.stdout.strip() == '1':
+                            current_device = device_address
+                            
+                            # Get device info
+                            model = subprocess.run(['adb', '-s', device_address, 'shell', 'getprop', 'ro.product.model'],
+                                                 capture_output=True, text=True, timeout=5).stdout.strip()
+                            android_version = subprocess.run(['adb', '-s', device_address, 'shell', 'getprop', 'ro.build.version.release'],
+                                                            capture_output=True, text=True, timeout=5).stdout.strip()
+                            
+                            logger.info(f"✅ Connected to physical device: {model} (Android {android_version})")
+                            return {
+                                "status": "connected",
+                                "device_id": device_address,
+                                "device_mode": "physical",
+                                "model": model,
+                                "android_version": android_version,
+                                "connection_output": result.stdout,
+                                "connection_method": "tcp_direct"
+                            }
+                    except Exception as e:
+                        logger.debug(f"Device not ready yet (attempt {attempt + 1}/10): {e}")
+                
+                raise HTTPException(status_code=500, detail="Device connected but not ready after 20 seconds")
             
-            # Wait for device to be ready
-            for attempt in range(10):
-                await asyncio.sleep(2)
-                try:
-                    boot_check = subprocess.run(
-                        ['adb', '-s', device_address, 'shell', 'getprop', 'sys.boot_completed'],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if boot_check.stdout.strip() == '1':
-                        current_device = device_address
+            # No device_ip provided - Auto-detect USB-connected physical device and configure TCP access
+            else:
+                logger.info("🔍 Auto-detecting USB-connected physical device...")
+                
+                # First, try to get device IP from already TCP-connected devices
+                devices_result = subprocess.run(['adb', 'devices'], 
+                                              capture_output=True, text=True, timeout=5)
+                
+                # Check for TCP-connected devices first (format: IP:port)
+                lines = devices_result.stdout.strip().split('\n')[1:]  # Skip header
+                tcp_devices = []
+                usb_devices = []
+                
+                for line in lines:
+                    if '\tdevice' in line:
+                        device_id = line.split('\t')[0]
                         
-                        # Get device info
-                        model = subprocess.run(['adb', '-s', device_address, 'shell', 'getprop', 'ro.product.model'],
+                        # TCP devices have IP:port format
+                        if ':' in device_id and not device_id.startswith('emulator-'):
+                            tcp_devices.append(device_id)
+                        # USB devices have serial numbers (not emulator-XXXX, not IP:port format)
+                        elif not device_id.startswith('emulator-'):
+                            usb_devices.append(device_id)
+                
+                # If we already have a TCP-connected device, use it
+                if tcp_devices:
+                    tcp_address = tcp_devices[0]
+                    logger.info(f"📱 Found already TCP-connected device: {tcp_address}")
+                    
+                    # Get device info
+                    try:
+                        model = subprocess.run(['adb', '-s', tcp_address, 'shell', 'getprop', 'ro.product.model'],
                                              capture_output=True, text=True, timeout=5).stdout.strip()
-                        android_version = subprocess.run(['adb', '-s', device_address, 'shell', 'getprop', 'ro.build.version.release'],
+                        android_version = subprocess.run(['adb', '-s', tcp_address, 'shell', 'getprop', 'ro.build.version.release'],
                                                         capture_output=True, text=True, timeout=5).stdout.strip()
-                        
-                        logger.info(f"✅ Connected to physical device: {model} (Android {android_version})")
-                        return {
-                            "status": "connected",
-                            "device_id": device_address,
-                            "device_mode": "physical",
-                            "model": model,
-                            "android_version": android_version,
-                            "connection_output": result.stdout
-                        }
-                except Exception as e:
-                    logger.debug(f"Device not ready yet (attempt {attempt + 1}/10): {e}")
-            
-            raise HTTPException(status_code=500, detail="Device connected but not ready after 20 seconds")
+                    except:
+                        model = "Unknown"
+                        android_version = "Unknown"
+                    
+                    current_device = tcp_address
+                    
+                    logger.info(f"✅ Using TCP-connected device: {model} (Android {android_version})")
+                    return {
+                        "status": "connected",
+                        "device_id": tcp_address,
+                        "device_mode": "physical",
+                        "model": model,
+                        "android_version": android_version,
+                        "connection_method": "tcp_existing"
+                    }
+                
+                # No TCP device found, look for USB device and configure it
+                if not usb_devices:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="No physical device found. Please:\n"
+                               "1. Connect device via USB, OR\n"
+                               "2. Ensure device is already connected via TCP (run: adb tcpip 5555 && adb connect <DEVICE_IP>:5555)\n"
+                               "3. Run 'adb devices' on host to verify connection"
+                    )
+                
+                # Use first USB device - but we can't configure it from Docker!
+                usb_device_id = usb_devices[0]
+                logger.error(f"❌ Found USB device '{usb_device_id}' but cannot access USB from Docker container")
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"USB device detected ('{usb_device_id}') but Docker cannot access USB devices.\n\n"
+                           f"Please run these commands on your HOST machine:\n"
+                           f"1. adb -s {usb_device_id} tcpip 5555\n"
+                           f"2. Get device IP: adb -s {usb_device_id} shell ip route | findstr src\n"
+                           f"3. adb connect <DEVICE_IP>:5555\n\n"
+                           f"OR use the automated script:\n"
+                           f"   .\\setup-physical-device.ps1\n\n"
+                           f"Then try creating the session again."
+                )
             
         elif config.device_mode == 'emulator':
             # Android Studio emulator or local emulator
@@ -341,32 +419,54 @@ async def lifespan(app: FastAPI):
     await db_manager.connect()
     logger.info("Database connected")
     
-    # Auto-connect to host emulator on startup (if available)
-    # This ensures the emulator is ready when sessions are created
+    # Auto-detect and connect physical devices and emulators on startup
+    logger.info("🔍 Auto-detecting devices on host machine...")
+    
     try:
-        host_emulator = f"{DEFAULT_EMULATOR_HOST}:{DEFAULT_EMULATOR_PORT}"
-        logger.info(f"Attempting auto-connection to host emulator at {host_emulator}...")
+        # Check what devices are on the host via adb (uses host.docker.internal ADB server)
+        # Note: This sees host's ADB server through Docker bridge
+        devices_on_host = []
         
-        # Try to connect
-        result = subprocess.run(['adb', 'connect', host_emulator], 
-                              capture_output=True, text=True, timeout=10)
+        # Try multiple common device IPs that might be connected
+        common_ips = [
+            f"{DEFAULT_EMULATOR_HOST}:{DEFAULT_EMULATOR_PORT}",  # Emulator
+            "192.168.0.80:5555",  # Physical device (your IP)
+            "192.168.1.100:5555",  # Common router IP range
+        ]
         
-        # Wait a moment for connection to establish
+        for device_addr in common_ips:
+            try:
+                logger.info(f"Trying to connect to {device_addr}...")
+                connect_result = subprocess.run(
+                    ['adb', 'connect', device_addr],
+                    capture_output=True, text=True, timeout=5
+                )
+                
+                if 'connected' in connect_result.stdout.lower() or 'already connected' in connect_result.stdout.lower():
+                    logger.info(f"✅ Connected to {device_addr}")
+                    devices_on_host.append(device_addr)
+                    await asyncio.sleep(1)  # Give time for connection to stabilize
+                    
+            except Exception as e:
+                logger.debug(f"Could not connect to {device_addr}: {e}")
+        
+        # Now check all connected devices
         await asyncio.sleep(2)
+        devices_check = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=5)
+        logger.info(f"📱 Devices after auto-connect:\n{devices_check.stdout}")
         
-        # Verify connection
-        devices_result = subprocess.run(['adb', 'devices'], 
-                                      capture_output=True, text=True, timeout=5)
+        # Count connected devices
+        lines = devices_check.stdout.strip().split('\n')[1:]
+        connected_count = sum(1 for line in lines if line.strip() and '\tdevice' in line)
         
-        if host_emulator in devices_result.stdout and 'device' in devices_result.stdout:
-            logger.info(f"✅ Auto-connected to host emulator: {host_emulator}")
-            logger.info("Emulator is ready for session creation")
+        if connected_count > 0:
+            logger.info(f"✅ {connected_count} device(s) ready for sessions")
         else:
-            logger.info(f"⚠️  No emulator detected at {host_emulator}")
-            logger.info("Emulator will be connected when session is created (if available)")
+            logger.info("⚠️  No devices auto-connected. Will try to connect when session starts.")
+            
     except Exception as e:
-        logger.warning(f"Auto-connect to emulator failed (normal if emulator not running): {e}")
-        logger.info("Emulator will be connected when session is created")
+        logger.warning(f"Auto-device detection failed: {e}")
+        logger.info("Devices will be connected when session is created")
     
     logger.info("✅ Emulator Manager Service ready")
     
@@ -518,6 +618,7 @@ async def disconnect_device(device_id: Optional[str] = None):
 async def list_available_devices():
     """
     List all available devices (both emulators and physical devices)
+    Includes USB-connected devices, TCP-connected devices, and emulators
     """
     try:
         result = subprocess.run(['adb', 'devices', '-l'], 
@@ -525,46 +626,93 @@ async def list_available_devices():
         
         lines = result.stdout.strip().split('\n')[1:]  # Skip header
         devices = []
+        emulator_count = 0
+        physical_count = 0
         
         for line in lines:
-            if '\tdevice' in line:
-                parts = line.split()
-                device_id = parts[0]
+            # Skip empty lines
+            if not line.strip():
+                continue
+            
+            # Check if line contains 'device' status anywhere (handles tabs/multiple spaces)
+            if '\tdevice' not in line and ' device ' not in line:
+                continue
                 
-                # Determine device type
-                is_emulator = 'emulator-' in device_id
-                device_mode = 'emulator' if is_emulator else 'physical'
+            parts = line.split()
+            if len(parts) < 2:
+                continue
                 
-                # Parse additional info
-                info = {
-                    "device_id": device_id,
-                    "device_mode": device_mode,
-                    "status": "available"
-                }
+            device_id = parts[0]
+            device_status = parts[1] if len(parts) > 1 else ''
+            
+            # Only include devices with 'device' status (not 'offline', 'unauthorized', etc.)
+            if device_status != 'device':
+                continue
+            
+            # Determine device type
+            is_emulator = 'emulator-' in device_id
+            # TCP connections (IP:port) or USB serial numbers
+            is_tcp = ':' in device_id
+            is_usb = not is_emulator and not is_tcp
+            
+            if is_emulator:
+                device_mode = 'emulator'
+                connection_type = 'local'
+                emulator_count += 1
+            elif is_tcp:
+                device_mode = 'physical'
+                connection_type = 'tcp'
+                physical_count += 1
+            else:  # USB
+                device_mode = 'physical'
+                connection_type = 'usb'
+                physical_count += 1
+            
+            # Parse additional info
+            info = {
+                "device_id": device_id,
+                "device_mode": device_mode,
+                "connection_type": connection_type,
+                "status": "available",
+                "ready_for_docker": is_tcp or is_emulator  # USB devices need TCP conversion
+            }
+            
+            # Extract model and product if available from adb output
+            for part in parts[2:]:  # Skip device_id and status
+                if ':' in part:
+                    key, value = part.split(':', 1)
+                    info[key] = value
+            
+            # Try to get more details via ADB
+            try:
+                model = subprocess.run(['adb', '-s', device_id, 'shell', 'getprop', 'ro.product.model'],
+                                     capture_output=True, text=True, timeout=2).stdout.strip()
+                android_ver = subprocess.run(['adb', '-s', device_id, 'shell', 'getprop', 'ro.build.version.release'],
+                                            capture_output=True, text=True, timeout=2).stdout.strip()
+                cpu_abi = subprocess.run(['adb', '-s', device_id, 'shell', 'getprop', 'ro.product.cpu.abi'],
+                                        capture_output=True, text=True, timeout=2).stdout.strip()
                 
-                # Extract model and product if available
-                for part in parts[1:]:
-                    if ':' in part:
-                        key, value = part.split(':', 1)
-                        info[key] = value
+                info['model'] = model
+                info['android_version'] = android_ver
+                info['cpu_architecture'] = cpu_abi
                 
-                # Try to get more details
-                try:
-                    model = subprocess.run(['adb', '-s', device_id, 'shell', 'getprop', 'ro.product.model'],
-                                         capture_output=True, text=True, timeout=2).stdout.strip()
-                    android_ver = subprocess.run(['adb', '-s', device_id, 'shell', 'getprop', 'ro.build.version.release'],
-                                                capture_output=True, text=True, timeout=2).stdout.strip()
-                    info['model'] = model
-                    info['android_version'] = android_ver
-                except:
-                    pass
-                
-                devices.append(info)
+                # Add helpful note for USB devices
+                if connection_type == 'usb':
+                    info['note'] = 'Will be automatically configured for TCP access when session starts'
+                    
+            except Exception as e:
+                logger.debug(f"Could not get full device info for {device_id}: {e}")
+                pass
+            
+            devices.append(info)
         
         return {
             "total_devices": len(devices),
+            "emulators": emulator_count,
+            "physical_devices": physical_count,
             "devices": devices,
-            "current_device": current_device
+            "current_device": current_device,
+            "note": "USB-connected physical devices will be automatically configured for TCP access during session creation"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list devices: {str(e)}")

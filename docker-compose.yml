@@ -84,8 +84,8 @@ services:
     environment:
       - EMULATOR_HOST=host.docker.internal  # Connect to host machine emulator
       - ADB_PORT=${ADB_PORT:-5555}
-      - SCREENSHOT_INTERVAL=${SCREENSHOT_INTERVAL:-0.333}
-      - SCREENSHOT_FPS=3
+      - SCREENSHOT_INTERVAL=${SCREENSHOT_INTERVAL:-0.0625}  # 16 FPS = 1/16 = 0.0625 seconds
+      - SCREENSHOT_FPS=16
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DB_USER=${DB_USER:-playmetric}
       - DB_PASSWORD=${DB_PASSWORD:-playmetric123}
@@ -144,7 +144,39 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 5. AI AGENT (Advanced RL)
+  # 5. VISION AI SERVICE (LLaVA/GPT-4V/Gemini)
+  # ============================================
+  vision:
+    image: playmetric-vision:latest
+    build:
+      context: ./vision
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: playmetric-base-ml:latest
+    container_name: playmetric-vision
+    depends_on:
+      - postgres
+    ports:
+      - "8006:8006"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8006
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data/models:/data/models  # Shared LLaVA model cache
+      - ./shared:/app/shared
+    networks:
+      - playmetric-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G  # BLIP-2 uses only ~3-4GB (much less than LLaVA's ~20GB)
+        reservations:
+          memory: 2G
+
+  # ============================================
+  # 6. AI AGENT (Advanced RL)
   # ============================================
   agent:
     image: playmetric-agent:latest
@@ -156,6 +188,7 @@ services:
     container_name: playmetric-agent
     depends_on:
       - observation
+      - vision
       # - emulator  # Using host machine emulator
       - postgres
       - redis
@@ -165,6 +198,7 @@ services:
       - AGENT_MODE=${AGENT_MODE:-heuristic}
       - ACTION_INTERVAL=${ACTION_INTERVAL:-1.5}
       - OBSERVATION_URL=http://observation:8001
+      - VISION_URL=http://vision:8006
       - ORCHESTRATOR_URL=http://orchestrator:8000
       - EMULATOR_MANAGER_URL=http://emulator-manager:8005
       - EMULATOR_HOST=${DEVICE_IP:-host.docker.internal}  # Physical device IP
@@ -182,7 +216,6 @@ services:
       - SCREEN_WIDTH=${SCREEN_WIDTH:-1080}
       - SCREEN_HEIGHT=${SCREEN_HEIGHT:-1920}
     volumes:
-      - ./data/models:/data/models
       - ./data/screenshots:/data/screenshots:ro
       - ./shared:/app/shared
       - agent-data:/agent/data
@@ -195,7 +228,7 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 6. ORCHESTRATOR API
+  # 7. ORCHESTRATOR API
   # ============================================
   orchestrator:
     image: playmetric-orchestrator:latest

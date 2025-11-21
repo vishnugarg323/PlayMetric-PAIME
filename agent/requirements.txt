@@ -1,32 +1,8 @@
-# Core framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
-httpx==0.25.2
+# Agent-specific dependencies (base-ml already has: fastapi, uvicorn, pydantic, httpx, asyncpg, numpy, opencv, pillow, torch, scikit-image, scikit-learn, pytesseract, imagehash)
 
 # Database
-asyncpg==0.29.0
 sqlalchemy==2.0.23
-redis==5.0.1
+redis==5.1.0
 
-# CV/ML dependencies
-numpy==1.26.2
-opencv-python-headless==4.8.1.78
-pillow==10.1.0
-torch==2.1.1
-scikit-image==0.22.0
-scikit-learn==1.3.2
-pytesseract==0.3.10
-imagehash==4.3.1
-
-# Vision AI
+# Vision AI (agent calls Vision Service, doesn't load LLaVA itself)
 google-generativeai==0.3.2
-
-# LLaVA local vision model (optional - for unlimited free vision AI)
-# Requires ~10GB RAM and ~7GB download on first run
-# Compatible versions with torch 2.1.1
-transformers==4.45.0
-accelerate==0.34.2
-sentencepiece==0.1.99
-protobuf==4.23.4

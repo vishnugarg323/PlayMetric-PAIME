@@ -6,6 +6,7 @@ import sys
 import asyncio
 import logging
 import time
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
@@ -38,7 +39,7 @@ from .hybrid_intelligence import HybridGameIntelligence
 from .learning_recorder import LearningRecorder
 from .learning_recorder_v2 import ObservationRecorder, DecisionRecorder
 from .high_performance_capture import HighPerformanceCapture, ScreenshotBatch
-from .vision_intelligence import VisionIntelligence
+# Vision Intelligence now via external Vision Service (not local)
 from .reward_system import RewardSystem
 from .user_demo_matcher import UserDemonstrationMatcher
 from .training_pipeline import TrainingPipeline
@@ -49,6 +50,47 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# VISION SERVICE API CLIENT
+# ============================================================================
+async def call_vision_service(screenshot_path: str, context: dict = None) -> dict:
+    """Call the Vision AI Service for screenshot analysis"""
+    global http_client
+    
+    if not http_client:
+        logger.warning("HTTP client not initialized")
+        return None
+    
+    vision_url = os.getenv("VISION_URL", "http://vision:8006")
+    
+    try:
+        # Read screenshot file
+        with open(screenshot_path, 'rb') as f:
+            screenshot_data = f.read()
+        
+        # Call Vision Service
+        response = await http_client.post(
+            f"{vision_url}/analyze",
+            files={"image": ("screenshot.png", screenshot_data, "image/png")},
+            data={"context": json.dumps(context or {})}
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.warning(f"Vision Service returned {response.status_code}")
+            return None
+    
+    except Exception as e:
+        logger.warning(f"Vision Service call failed: {e}")
+        return None
+
+
+# ============================================================================
+# GLOBAL INSTANCES
+# ============================================================================
 
 # Global instances
 agent = None
@@ -61,7 +103,7 @@ observation_recorder = None  # NEW: High-performance user observation recorder
 decision_recorder = None  # NEW: AI decision recorder
 hp_capture = None  # NEW: High-performance 16 FPS capture system
 dual_mode_controller = None  # NEW: Dual-mode controller for user observation and AI auto-play
-vision_intelligence = None  # NEW: Vision AI for deep game understanding
+# Vision AI now via external Vision Service API (http://vision:8006)
 reward_system = None  # NEW: Advanced reward calculation system
 user_demo_matcher = None  # NEW: Smart user demonstration matching
 training_pipeline = None  # NEW: Automated training pipeline
@@ -73,6 +115,7 @@ observation_url = None
 observation_service_url = None
 emulator_manager_url = None
 orchestrator_url = None
+vision_url = None  # Vision Service URL
 http_client: Optional[httpx.AsyncClient] = None
 db_manager = None
 
@@ -159,22 +202,19 @@ async def lifespan(app: FastAPI):
     # with dynamically detected screen dimensions (see start_playing endpoint)
     logger.info("⚙️  Action space and intelligence systems will be initialized per session with detected screen dimensions")
     
-    # Get service URLs
+    # Get service URLs (set globals)
+    global observation_url, observation_service_url, emulator_manager_url, orchestrator_url, vision_url
     observation_url = os.getenv("OBSERVATION_URL", "http://observation:8001")
     observation_service_url = observation_url  # Alias for clarity
     emulator_manager_url = os.getenv("EMULATOR_MANAGER_URL", "http://emulator-manager:8005")
     orchestrator_url = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8000")
+    vision_url = os.getenv("VISION_URL", "http://vision:8006")
     
     # Create HTTP client
     http_client = httpx.AsyncClient(timeout=30.0)
     
-    # Start pre-loading LLaVA model in background
-    try:
-        from .llava_loader import start_preload
-        await start_preload()
-        logger.info("🔮 LLaVA model pre-loading started in background")
-    except Exception as e:
-        logger.debug(f"LLaVA pre-load not started: {e}")
+    # Vision Service handles LLaVA model (no local loading needed)
+    logger.info(f"🔮 Using Vision AI Service at {vision_url}")
     
     logger.info("🚀 AI Agent Service V2 ready (16 FPS High-Performance Mode)")
     
@@ -330,24 +370,23 @@ async def play_loop():
                 if screenshot_comparison.get('changed_significantly'):
                     logger.info(f"✅ Screen changed significantly! Similarity: {screenshot_comparison['similarity_score']:.2%}")
                 
-                # === NEW: VISION AI DEEP ANALYSIS ===
-                if vision_intelligence:
-                    try:
-                        context = {
-                            'game_id': current_game_id,
-                            'session_id': current_session_id,
-                            'last_action': last_action_params
-                        }
-                        vision_analysis = await vision_intelligence.analyze_game_screen(
-                            screenshot_path=screenshot,
-                            context=context
-                        )
-                        if vision_analysis:
-                            logger.info(f"🔮 Vision AI: {vision_analysis.get('scene_type', 'unknown')} scene - "
-                                       f"Recommended: {vision_analysis.get('recommended_action', {}).get('action', 'none')}")
-                    except Exception as e:
-                        logger.warning(f"Vision AI analysis failed: {e}")
-                        vision_analysis = None
+                # === NEW: VISION AI DEEP ANALYSIS (via Vision Service) ===
+                try:
+                    context = {
+                        'game_id': current_game_id,
+                        'session_id': current_session_id,
+                        'last_action': last_action_params
+                    }
+                    vision_analysis = await call_vision_service(
+                        screenshot_path=screenshot,
+                        context=context
+                    )
+                    if vision_analysis:
+                        logger.info(f"🔮 Vision AI: {vision_analysis.get('scene_type', 'unknown')} scene - "
+                                   f"Recommended: {vision_analysis.get('recommended_action', {}).get('action', 'none')}")
+                except Exception as e:
+                    logger.warning(f"Vision AI analysis failed: {e}")
+                    vision_analysis = None
             
             # Load screenshot for RL agent
             if isinstance(agent, AdvancedRLAgent) and screenshot:
@@ -1184,10 +1223,33 @@ async def capture_and_broadcast_screenshot():
         logger.error(f"Error capturing screenshot: {e}")
 
 
-async def stop_playing():
-    """Stop the gameplay loop"""
+async def pause_playing():
+    global is_playing, play_task, ai_active, dual_mode_controller
+
+    if is_playing:
+        is_playing = False
+        ai_active = False
+
+        if play_task:
+            play_task.cancel()
+            try:
+                await play_task
+            except asyncio.CancelledError:
+                pass
+
+        if dual_mode_controller:
+            try:
+                await dual_mode_controller.stop_ai_autoplay_mode()
+                await dual_mode_controller.stop_user_observation()
+            except Exception as e:
+                logger.error(f"Error stopping dual mode controller: {e}")
+
+        logger.info("Gameplay paused (session remains active)")
+
+
+async def stop_playing(complete_session: bool = True):
     global is_playing, play_task, agent, current_game_id, current_session_id
-    
+
     if is_playing:
         is_playing = False
         if play_task:
@@ -1196,40 +1258,38 @@ async def stop_playing():
                 await play_task
             except asyncio.CancelledError:
                 pass
-        
-        # Update session end time and calculate duration
-        if current_session_id:
-            try:
-                await db_manager.execute_write(
-                    """UPDATE sessions 
-                       SET completed_at = NOW(),
-                           duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::INTEGER,
-                           status = 'completed'
-                       WHERE id = $1""",
-                    current_session_id
-                )
-                logger.info(f"Session {current_session_id} completed and duration calculated")
-            except Exception as e:
-                logger.error(f"Failed to update session end time: {e}")
-        
-        # Save RL model if applicable
-        if isinstance(agent, AdvancedRLAgent) and current_game_id:
-            try:
-                await agent.save_model(current_game_id)
-                logger.info("Saved RL model")
-            except Exception as e:
-                logger.error(f"Error saving model: {e}")
-        
-        # Save hybrid intelligence RL model
-        if hybrid_intelligence and hybrid_intelligence.rl_agent:
-            try:
-                hybrid_intelligence.save_rl_model()
-                hybrid_intelligence.end_session({'total_reward': 0})  # Placeholder
-                logger.info("Saved hybrid intelligence RL model")
-            except Exception as e:
-                logger.error(f"Error saving hybrid RL model: {e}")
-        
-        logger.info("Gameplay stopped")
+
+        if complete_session:
+            if current_session_id:
+                try:
+                    await db_manager.execute_write(
+                        """UPDATE sessions
+                           SET completed_at = NOW(),
+                               duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::INTEGER,
+                               status = 'completed'
+                           WHERE id = $1""",
+                        current_session_id
+                    )
+                    logger.info(f"Session {current_session_id} completed and duration calculated")
+                except Exception as e:
+                    logger.error(f"Failed to update session end time: {e}")
+
+            if isinstance(agent, AdvancedRLAgent) and current_game_id:
+                try:
+                    await agent.save_model(current_game_id)
+                    logger.info("Saved RL model")
+                except Exception as e:
+                    logger.error(f"Error saving model: {e}")
+
+            if hybrid_intelligence and hybrid_intelligence.rl_agent:
+                try:
+                    hybrid_intelligence.save_rl_model()
+                    hybrid_intelligence.end_session({'total_reward': 0})
+                    logger.info("Saved hybrid intelligence RL model")
+                except Exception as e:
+                    logger.error(f"Error saving hybrid RL model: {e}")
+
+        logger.info("Gameplay stopped" + (" and session completed" if complete_session else ""))
 
 
 @app.get("/health")
@@ -1272,7 +1332,7 @@ async def start_playing(request: StartPlayingRequest):
     global current_package_name, training_enabled, training_interval, game_intelligence, ai_active
     global action_space, advanced_intelligence, hybrid_intelligence, learning_mode
     global current_device_mode, current_device_ip, dual_mode_controller
-    global vision_intelligence, reward_system, user_demo_matcher, training_pipeline
+    global reward_system, user_demo_matcher, training_pipeline
     
     if is_playing:
         return {"message": "Already playing", "agent": agent.__class__.__name__}
@@ -1343,9 +1403,8 @@ async def start_playing(request: StartPlayingRequest):
     )
     logger.info("✅ Dual-Mode Controller initialized")
     
-    # Initialize Vision Intelligence (LLaVA/GPT-4V/Gemini)
-    vision_intelligence = VisionIntelligence(model_type="auto")
-    logger.info("✅ Vision Intelligence initialized")
+    # Vision Intelligence now handled by external Vision Service (http://vision:8006)
+    logger.info("✅ Vision Service integration ready")
     
     # Initialize Advanced Reward System
     reward_system = RewardSystem()
@@ -1359,7 +1418,7 @@ async def start_playing(request: StartPlayingRequest):
     training_pipeline = TrainingPipeline(
         db_manager=db_manager,
         rl_agent=agent if request.agent_mode == "advanced_rl" else None,
-        vision_intelligence=vision_intelligence,
+        vision_intelligence=None,  # Vision Service API used instead
         reward_system=reward_system
     )
     # Start continuous training loop
@@ -1724,19 +1783,176 @@ async def get_ai_decisions(limit: int = 20):
         }
 
 
+@app.post("/play/switch-to-ai")
+async def switch_to_ai_mode():
+    global learning_mode, ai_active, is_playing, dual_mode_controller, training_pipeline
+    global current_session_id, current_game_id, agent
+
+    if not current_session_id:
+        raise HTTPException(status_code=400, detail="No active session")
+
+    if learning_mode == 'auto_play':
+        return {"message": "Already in AI mode", "ai_active": ai_active}
+
+    if not dual_mode_controller:
+        raise HTTPException(status_code=500, detail="Dual mode controller not initialized")
+
+    logger.info("🔄 Switching from user observation to AI gameplay...")
+
+    try:
+        await dual_mode_controller.stop_user_observation()
+        logger.info("✅ User observation stopped")
+    except Exception as e:
+        logger.error(f"Error stopping user observation: {e}")
+
+    observation_count = 0
+    try:
+        query = """
+            SELECT COUNT(*) as count
+            FROM user_observations
+            WHERE session_id = $1
+        """
+        result = await db_manager.pool.fetchrow(query, current_session_id)
+        observation_count = result['count'] if result else 0
+
+        logger.info(f"📊 Found {observation_count} user observations in current session")
+
+        if observation_count > 0 and training_pipeline:
+            logger.info("🧠 Retraining AI with fresh user demonstrations...")
+
+            demo_query = """
+                SELECT
+                    screen_before, user_action, screen_after,
+                    ai_analysis, outcome, led_to_progress
+                FROM user_observations
+                WHERE session_id = $1
+                ORDER BY timestamp ASC
+            """
+            demonstrations = await db_manager.pool.fetch(demo_query, current_session_id)
+
+            await training_pipeline.train_from_demonstrations(demonstrations)
+            logger.info(f"✅ AI retrained with {len(demonstrations)} demonstrations")
+        else:
+            logger.warning("⚠️  No user demonstrations found in current session")
+
+    except Exception as e:
+        logger.error(f"Error loading/training from user demonstrations: {e}")
+
+    learning_mode = 'auto_play'
+    ai_active = True
+    is_playing = True
+
+    logger.info("🤖 Starting AI gameplay with learned behaviors...")
+
+    try:
+        await dual_mode_controller.start_ai_autoplay_mode(
+            session_id=current_session_id,
+            game_id=current_game_id
+        )
+        logger.info("✅ AI auto-play mode started with fresh learning")
+    except Exception as e:
+        logger.error(f"Failed to start AI auto-play mode: {e}")
+        ai_active = False
+        is_playing = False
+        raise HTTPException(status_code=500, detail=f"Failed to start AI: {str(e)}")
+
+    return {
+        "message": "Switched to AI mode with immediate learning from user demonstrations",
+        "mode": "auto_play",
+        "ai_active": True,
+        "session_id": current_session_id,
+        "observations_used": observation_count,
+        "info": "AI is now playing using behaviors learned from your gameplay"
+    }
+
+
+@app.post("/play/pause-gameplay")
+async def pause_gameplay_endpoint():
+    global ai_active, dual_mode_controller
+
+    ai_active = False
+
+    await pause_playing()
+
+    stats = {}
+    if isinstance(agent, AdvancedRLAgent):
+        stats = {
+            'episodes': agent.episodes,
+            'steps': agent.steps,
+            'epsilon': agent.epsilon,
+            'memory_size': len(agent.memory)
+        }
+    elif hasattr(agent, 'get_statistics'):
+        stats = agent.get_statistics()
+
+    return {
+        "message": "Gameplay paused (session remains active)",
+        "statistics": stats,
+        "session_id": current_session_id,
+        "can_resume": True
+    }
+
+
+@app.post("/play/resume-gameplay")
+async def resume_gameplay_endpoint():
+    global is_playing, play_task, ai_active, learning_mode, dual_mode_controller
+
+    if is_playing:
+        return {"message": "Already playing"}
+
+    if not current_session_id:
+        raise HTTPException(status_code=400, detail="No active session to resume")
+
+    is_playing = True
+
+    if learning_mode == 'auto_play':
+        ai_active = True
+        logger.info("🤖 Resuming AI gameplay")
+
+        if dual_mode_controller:
+            try:
+                await dual_mode_controller.start_ai_autoplay_mode(
+                    session_id=current_session_id,
+                    game_id=current_game_id
+                )
+                logger.info("✅ AI auto-play mode resumed")
+            except Exception as e:
+                logger.error(f"Failed to resume AI auto-play: {e}")
+                is_playing = False
+                raise HTTPException(status_code=500, detail=f"Failed to resume AI: {str(e)}")
+    else:
+        logger.info("👤 Resuming user observation")
+
+        if dual_mode_controller:
+            try:
+                await dual_mode_controller.start_user_observation(
+                    session_id=current_session_id,
+                    game_id=current_game_id
+                )
+                logger.info("✅ User observation resumed")
+            except Exception as e:
+                logger.error(f"Failed to resume user observation: {e}")
+                is_playing = False
+                raise HTTPException(status_code=500, detail=f"Failed to resume observation: {str(e)}")
+
+    return {
+        "message": f"Gameplay resumed in {learning_mode} mode",
+        "session_id": current_session_id,
+        "learning_mode": learning_mode,
+        "ai_active": ai_active
+    }
+
+
 @app.post("/play/stop")
 async def stop_playing_endpoint():
-    """Stop automated gameplay"""
     global ai_active, training_pipeline
     ai_active = False
-    
-    # Stop training pipeline if running
+
     if training_pipeline:
         await training_pipeline.stop_training_loop()
-    
-    await stop_playing()
-    
-    # Get final statistics
+
+    await stop_playing(complete_session=True)
+
     stats = {}
     if isinstance(agent, AdvancedRLAgent):
         stats = {
@@ -1748,9 +1964,9 @@ async def stop_playing_endpoint():
         }
     elif hasattr(agent, 'get_statistics'):
         stats = agent.get_statistics()
-    
+
     return {
-        "message": "Gameplay stopped",
+        "message": "Gameplay stopped and session completed",
         "statistics": stats
     }
 
@@ -1810,23 +2026,18 @@ async def get_latest_screenshot():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/vision/llava/status")
-async def get_llava_status():
-    """Get LLaVA model loading status"""
+@app.get("/vision/status")
+async def get_vision_status():
+    """Get Vision Service status (proxied from vision:8006)"""
     try:
-        from .llava_loader import llava_loader
-        status = llava_loader.get_status()
-        
-        # Add model info if loaded
-        if status['loaded']:
-            import torch
-            status['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
-            if torch.cuda.is_available():
-                status['gpu_name'] = torch.cuda.get_device_name(0)
-        
-        return status
+        response = await http_client.get(f"{vision_url}/model/status")
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"Vision Service returned {response.status_code}"}
     except Exception as e:
         return {"error": str(e)}
+
 
 
 @app.get("/vision/learned-data")
@@ -1986,12 +2197,13 @@ async def get_training_stats():
     try:
         stats = training_pipeline.get_training_stats()
         
-        # Add vision intelligence stats if available
-        if vision_intelligence:
-            stats['vision_intelligence'] = {
-                'model_type': vision_intelligence.model_type,
-                'available': vision_intelligence.vision_available
-            }
+        # Add Vision Service status
+        try:
+            vision_status = await http_client.get(f"{vision_url}/model/status")
+            if vision_status.status_code == 200:
+                stats['vision_service'] = vision_status.json()
+        except:
+            stats['vision_service'] = {"error": "Vision Service unavailable"}
         
         # Add reward system stats
         if reward_system:
@@ -2004,13 +2216,6 @@ async def get_training_stats():
             stats['user_demo_matcher'] = {
                 'cache_size': len(user_demo_matcher.demo_cache) if hasattr(user_demo_matcher, 'demo_cache') else 0
             }
-        
-        # Add LLaVA status
-        try:
-            from .llava_loader import llava_loader
-            stats['llava'] = llava_loader.get_status()
-        except:
-            pass
         
         return stats
     except Exception as e:

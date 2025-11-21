@@ -144,7 +144,7 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 5. VISION AI SERVICE (LLaVA/GPT-4V/Gemini)
+  # 5. VISION AI SERVICE (BLIP-2/Gemini/OCR)
   # ============================================
   vision:
     image: playmetric-vision:latest
@@ -162,8 +162,10 @@ services:
       - API_HOST=0.0.0.0
       - API_PORT=8006
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
-      - ./data/models:/data/models  # Shared LLaVA model cache
+      - ./data/models:/data/models  # BLIP-2 model cache
+      - ./data/screenshots:/data/screenshots
       - ./shared:/app/shared
     networks:
       - playmetric-network
@@ -171,14 +173,79 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G  # BLIP-2 uses only ~3-4GB (much less than LLaVA's ~20GB)
+          memory: 8G  # BLIP-2 uses ~1.6GB
         reservations:
           memory: 2G
 
   # ============================================
-  # 6. AI AGENT (Advanced RL)
+  # 6. LEARNING SERVICE (Offline Video Analysis)
   # ============================================
-  agent:
+  learning:
+    image: playmetric-learning:latest
+    build:
+      context: ./learning
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: playmetric-base-ml:latest
+    container_name: playmetric-learning
+    depends_on:
+      - vision
+      - postgres
+    ports:
+      - "8007:8007"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8007
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - VISION_SERVICE_URL=http://vision:8006
+    volumes:
+      - ./data/videos:/data/videos
+      - ./data/knowledge:/data/knowledge
+      - ./data/screenshots:/data/screenshots
+      - ./shared:/app/shared
+    networks:
+      - playmetric-network
+    restart: unless-stopped
+
+  # ============================================
+  # 7. AI PLAYER SERVICE (Decision Engine)
+  # ============================================
+  ai-player:
+    image: playmetric-ai-player:latest
+    build:
+      context: ./ai_player
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: playmetric-base-ml:latest
+    container_name: playmetric-ai-player
+    depends_on:
+      - vision
+      - observation
+      - learning
+      - postgres
+    ports:
+      - "8008:8008"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8008
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - VISION_SERVICE_URL=http://vision:8006
+      - OBSERVATION_SERVICE_URL=http://observation:8001
+    volumes:
+      - ./data/knowledge:/data/knowledge
+      - ./data/screenshots:/data/screenshots
+      - ./data/decisions:/data/decisions
+      - ./shared:/app/shared
+    networks:
+      - playmetric-network
+    restart: unless-stopped
+
+  # ============================================
+  # 8. AI AGENT (DEPRECATED - USE AI PLAYER)
+  # ============================================
+  # agent:
+  #   # This service is being replaced by ai-player with decision engine
+  #   # Keeping commented for reference
     image: playmetric-agent:latest
     build:
       context: ./agent
@@ -228,7 +295,7 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 7. ORCHESTRATOR API
+  # 9. ORCHESTRATOR API
   # ============================================
   orchestrator:
     image: playmetric-orchestrator:latest
@@ -272,7 +339,7 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 7. DATABASE - PostgreSQL with TimescaleDB
+  # 10. DATABASE - PostgreSQL with TimescaleDB
   # ============================================
   postgres:
     image: timescale/timescaledb:latest-pg15
@@ -297,7 +364,7 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 8. REDIS (Caching & Session Management)
+  # 11. REDIS (Caching & Session Management)
   # ============================================
   redis:
     image: redis:7-alpine
@@ -317,7 +384,7 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 9. DASHBOARD (React Frontend)
+  # 12. DASHBOARD (Static HTML)
   # ============================================
   dashboard:
     image: playmetric-dashboard:latest

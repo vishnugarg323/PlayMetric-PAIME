@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useAppStore } from '../store'
+import { useAuth } from '../contexts/AuthContext'
 import {
   LayoutDashboard,
   Gamepad2,
@@ -9,10 +10,14 @@ import {
   GitCompare,
   Settings,
   ChevronLeft,
+  Info,
+  Shield,
+  LogOut,
 } from 'lucide-react'
 
 export default function Sidebar() {
   const { sidebarOpen, toggleSidebar } = useAppStore()
+  const { logout } = useAuth()
 
   const links = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -22,7 +27,16 @@ export default function Sidebar() {
     { to: '/bugs', icon: Bug, label: 'Bug Tracker' },
     { to: '/version-comparison', icon: GitCompare, label: 'Version Compare' },
     { to: '/settings', icon: Settings, label: 'Settings' },
+    { to: '/admin', icon: Shield, label: 'Admin' },
+    { to: '/about', icon: Info, label: 'About' },
   ]
+
+  const handleLogout = () => {
+    if (confirm('Are you sure you want to logout?')) {
+      logout()
+      window.location.href = '/login'
+    }
+  }
 
   return (
     <aside
@@ -31,7 +45,7 @@ export default function Sidebar() {
       }`}
     >
       <div className="flex items-center justify-between h-16 px-6 border-b border-slate-700">
-        <h1 className="text-xl font-bold text-white">PlayMetric V2</h1>
+        <img src="/logo.png" alt="PlayMetric" className="h-10" />
         <button
           onClick={toggleSidebar}
           className="p-1 rounded hover:bg-slate-700 transition-colors"
@@ -57,11 +71,20 @@ export default function Sidebar() {
             <span className="font-medium">{link.label}</span>
           </NavLink>
         ))}
+
+        {/* Logout button */}
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-red-400 hover:bg-red-900/20 hover:text-red-300 mt-4"
+        >
+          <LogOut className="w-5 h-5" />
+          <span className="font-medium">Logout</span>
+        </button>
       </nav>
 
       <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-700">
         <div className="text-xs text-slate-400 text-center">
-          v2.0.0 | Advanced RL System
+          PlayMetric AI Testing Platform
         </div>
       </div>
     </aside>

@@ -7,7 +7,7 @@ import sys
 import logging
 import json
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Body
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Body, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -260,13 +260,17 @@ async def get_game_versions(game_id: str):
 
 
 @app.post("/games/upload")
-async def upload_game_apk(genre: str = Body(...), apk: UploadFile = File(...)):
-    """Upload APK and auto-create game with extracted metadata"""
+async def upload_game_apk(
+    genre: str = Form(...), 
+    apk: UploadFile = File(...),
+    training_video: Optional[UploadFile] = File(None)
+):
+    """Upload APK and optional training video, auto-create game with extracted metadata"""
     import tempfile
     from src.version_manager import APKParser
     
     try:
-        # Save uploaded file to temp location
+        # Save uploaded APK to temp location
         with tempfile.NamedTemporaryFile(delete=False, suffix='.apk') as temp_file:
             content = await apk.read()
             temp_file.write(content)
@@ -303,14 +307,43 @@ async def upload_game_apk(genre: str = Body(...), apk: UploadFile = File(...)):
             uploaded_by="api_user"
         )
         
-        # Clean up temp file
+        # Clean up APK temp file
         os.unlink(temp_path)
+        
+        # Handle optional training video
+        video_saved = False
+        video_path = None
+        if training_video:
+            try:
+                # Save training video to data/videos/{package_name}/
+                video_dir = f"/data/videos/{package_name}"
+                os.makedirs(video_dir, exist_ok=True)
+                video_path = f"{video_dir}/training_video_{int(time.time())}.mp4"
+                
+                with open(video_path, "wb") as video_file:
+                    video_content = await training_video.read()
+                    video_file.write(video_content)
+                
+                video_saved = True
+                logger.info(f"Saved training video for {package_name} at {video_path}")
+                
+                # Store video path in database
+                await db_manager.execute(
+                    """UPDATE games 
+                       SET training_video_path = $1, updated_at = NOW()
+                       WHERE id = $2""",
+                    video_path, game_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to save training video: {e}")
         
         return {
             "message": "Game and APK uploaded successfully",
             "game_id": game_id,
             "display_name": display_name,
             "package_name": package_name,
+            "training_video_saved": video_saved,
+            "training_video_path": video_path if video_saved else None,
             **result
         }
         
@@ -583,6 +616,81 @@ async def get_session(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@app.delete("/games/package/{package_name}")
+async def delete_game_by_package(package_name: str):
+    """Delete game and ALL associated data (APK, versions, sessions, screenshots, videos)"""
+    import shutil
+    try:
+        # Get game_id
+        game = await db_manager.execute_one(
+            "SELECT id FROM games WHERE package_name = $1", package_name
+        )
+        if not game:
+            raise HTTPException(status_code=404, detail=f"Game {package_name} not found")
+        
+        game_id = str(game['id'])
+        
+        # Delete filesystem data
+        paths_to_delete = [
+            f"/data/videos/{package_name}",
+            f"/data/knowledge/{package_name}",
+            f"/apks/{game_id}"
+        ]
+        for path in paths_to_delete:
+            if os.path.exists(path):
+                logger.info(f"Deleting directory: {path}")
+                shutil.rmtree(path, ignore_errors=True)
+        
+        # Delete from database (CASCADE will handle sessions, versions, bugs, etc.)
+        await db_manager.execute("DELETE FROM games WHERE id = $1", game_id)
+        
+        logger.info(f"Game {package_name} and all associated data deleted")
+        return {"message": f"Game {package_name} and all data deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting game {package_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/games/package/{package_name}/video")
+async def delete_training_video(package_name: str):
+    """Delete only training video and knowledge base"""
+    import shutil
+    try:
+        game = await db_manager.execute_one(
+            "SELECT id, training_video_path FROM games WHERE package_name = $1", 
+            package_name
+        )
+        if not game:
+            raise HTTPException(status_code=404, detail=f"Game {package_name} not found")
+        
+        # Delete video file
+        if game['training_video_path'] and os.path.exists(game['training_video_path']):
+            logger.info(f"Deleting video: {game['training_video_path']}")
+            os.remove(game['training_video_path'])
+        
+        # Delete knowledge base directory
+        knowledge_path = f"/data/knowledge/{package_name}"
+        if os.path.exists(knowledge_path):
+            logger.info(f"Deleting knowledge base: {knowledge_path}")
+            shutil.rmtree(knowledge_path, ignore_errors=True)
+        
+        # Update database
+        await db_manager.execute(
+            "UPDATE games SET training_video_path = NULL WHERE package_name = $1",
+            package_name
+        )
+        
+        logger.info(f"Training video for {package_name} deleted")
+        return {"message": f"Training video for {package_name} deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting video for {package_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.patch("/sessions/{session_id}/mode")
@@ -1098,6 +1206,108 @@ async def setup_session(session_id: str):
             str(e)
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================
+# Authentication Routes
+# =====================
+
+@app.post("/api/auth/login")
+async def login(username: str = Form(...), password: str = Form(...)):
+    """Simple authentication endpoint (hardcoded credentials)"""
+    try:
+        logger.info(f"Login attempt - username: {username}")
+        
+        # Hardcoded credentials for admin access
+        if username == "PlayMetric" and password == "Admin@PlayMetric@2025":
+            logger.info(f"✅ Login successful for user: {username}")
+            return {
+                "authenticated": True,
+                "username": username,
+                "token": "authenticated"  # Simple token for session
+            }
+        else:
+            logger.warning(f"❌ Invalid login attempt - username: {username}")
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auth/verify")
+async def verify_auth():
+    """Verify authentication status (simplified, always returns authenticated for now)"""
+    # In a full implementation, this would check session tokens
+    # For now, we return authenticated to allow access
+    return {"authenticated": True}
+
+
+# =====================
+# System Management Routes
+# =====================
+
+@app.post("/api/system/demo-video")
+async def upload_demo_video(demo_video: UploadFile = File(...)):
+    """Upload demo video for About page"""
+    try:
+        # Create system directory if not exists
+        demo_dir = "/data/system"
+        os.makedirs(demo_dir, exist_ok=True)
+        
+        # Save demo video (overwrite existing)
+        demo_path = os.path.join(demo_dir, "demo_video.mp4")
+        
+        with open(demo_path, "wb") as f:
+            content = await demo_video.read()
+            f.write(content)
+        
+        logger.info(f"Demo video uploaded: {demo_path}")
+        
+        # Store path in system_config table
+        await db_manager.execute_write(
+            """
+            INSERT INTO system_config (key, value) 
+            VALUES ('demo_video_path', $1)
+            ON CONFLICT (key) DO UPDATE SET value = $1
+            """,
+            demo_path
+        )
+        
+        return {
+            "success": True,
+            "message": "Demo video uploaded successfully",
+            "path": demo_path
+        }
+    except Exception as e:
+        logger.error(f"Error uploading demo video: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/system/demo-video")
+async def get_demo_video():
+    """Get demo video URL"""
+    try:
+        # Check if demo video exists in system_config
+        result = await db_manager.execute_read(
+            "SELECT value FROM system_config WHERE key = 'demo_video_path'"
+        )
+        
+        if not result or not result[0]:
+            return {"video_url": None}
+        
+        demo_path = result[0]['value']
+        
+        # Check if file exists
+        if os.path.exists(demo_path):
+            # Return relative URL that will be served by nginx or static file server
+            return {"video_url": "/data/system/demo_video.mp4"}
+        else:
+            return {"video_url": None}
+    except Exception as e:
+        logger.error(f"Error getting demo video: {e}")
+        return {"video_url": None}
 
 
 # Wrap the FastAPI app with Socket.IO ASGI app so websocket paths are

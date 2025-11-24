@@ -55,7 +55,7 @@ export default function CreateSession() {
 
   const [selectedGameId, setSelectedGameId] = useState<string>(preSelectedGameId || '')
   const [selectedVersionId, setSelectedVersionId] = useState<string>('')
-  const [agentMode, setAgentMode] = useState<string>('heuristic')
+  const [sessionType, setSessionType] = useState<'learning' | 'playing'>('learning')
   const [maxDuration, setMaxDuration] = useState<number>(300)
   const [maxActions, setMaxActions] = useState<number>(1000)
   
@@ -130,34 +130,32 @@ export default function CreateSession() {
       return
     }
 
-    // Session is created in 'pending' state without starting AI or user mode
-    // User will choose AI or User gameplay mode from session detail page
     const config: any = {
       max_duration_seconds: maxDuration,
       max_actions: maxActions,
       enable_screenshots: true,
-      screenshot_interval: 0.5, // Fast screenshot interval for quicker AI analysis
-      device_mode: deviceMode,
-      learning_mode: 'pending', // Will be set when user clicks Start AI or Start User Gameplay
+      screenshot_interval: 0.5,
+      session_type: sessionType, // 'learning' or 'playing'
     }
 
-    // If user selected a specific device, include it
-    // Otherwise backend will auto-detect best available device
-    if (selectedDeviceId) {
-      if (deviceMode === 'physical') {
-        // Extract IP from device_id (format: IP:PORT)
-        const deviceIp = selectedDeviceId.split(':')[0]
-        config.device_ip = deviceIp
-      } else {
-        // For emulator, pass the emulator name
-        config.emulator_name = selectedDeviceId
+    // Only add device info if session type is 'playing'
+    if (sessionType === 'playing') {
+      config.device_mode = deviceMode
+      
+      if (selectedDeviceId) {
+        if (deviceMode === 'physical') {
+          const deviceIp = selectedDeviceId.split(':')[0]
+          config.device_ip = deviceIp
+        } else {
+          config.emulator_name = selectedDeviceId
+        }
       }
     }
 
     createMutation.mutate({
       game_id: selectedGameId,
       version_id: selectedVersionId,
-      agent_mode: agentMode,
+      agent_mode: 'advanced_rl', // Always use RL mode
       config,
     })
   }
@@ -244,41 +242,41 @@ export default function CreateSession() {
           </div>
         )}
 
-        {/* Agent Mode */}
+        {/* Session Type Selection */}
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">
-            Agent Mode
+            Session Type
           </label>
           <div className="space-y-3">
             <label className="flex items-start p-4 bg-slate-700 rounded-lg border-2 border-slate-600 cursor-pointer hover:border-primary-500 transition-colors">
               <input
                 type="radio"
-                name="agent_mode"
-                value="heuristic"
-                checked={agentMode === 'heuristic'}
-                onChange={(e: any) => setAgentMode(e.target.value)}
+                name="session_type"
+                value="learning"
+                checked={sessionType === 'learning'}
+                onChange={(e: any) => setSessionType(e.target.value)}
                 className="mt-1 mr-3"
               />
               <div>
-                <div className="text-white font-semibold">Heuristic (Rule-Based)</div>
+                <div className="text-white font-semibold">AI Learning from Video</div>
                 <div className="text-sm text-slate-400">
-                  Simple rule-based AI that explores the UI systematically. Fast and deterministic.
+                  Process uploaded training video offline. No device needed. AI builds knowledge base.
                 </div>
               </div>
             </label>
             <label className="flex items-start p-4 bg-slate-700 rounded-lg border-2 border-slate-600 cursor-pointer hover:border-primary-500 transition-colors">
               <input
                 type="radio"
-                name="agent_mode"
-                value="advanced_rl"
-                checked={agentMode === 'advanced_rl'}
-                onChange={(e: any) => setAgentMode(e.target.value)}
+                name="session_type"
+                value="playing"
+                checked={sessionType === 'playing'}
+                onChange={(e: any) => setSessionType(e.target.value)}
                 className="mt-1 mr-3"
               />
               <div>
-                <div className="text-white font-semibold">Advanced RL (Reinforcement Learning)</div>
+                <div className="text-white font-semibold">AI Playing Game</div>
                 <div className="text-sm text-slate-400">
-                  Deep Q-Network that learns optimal testing strategies. Adaptive and intelligent.
+                  AI plays the game using learned knowledge + built-in intelligence (RL, OCR, Vision, LLM).
                 </div>
               </div>
             </label>
@@ -321,11 +319,12 @@ export default function CreateSession() {
           </div>
         </div>
 
-        {/* Device Mode Selection */}
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-3">
-            Device Type
-          </label>
+        {/* Device Mode Selection - Only show for 'playing' session type */}
+        {sessionType === 'playing' && (
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-3">
+              Device Type
+            </label>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <label
               className={`flex items-start p-4 rounded-lg border-2 cursor-pointer transition-all ${
@@ -460,6 +459,7 @@ export default function CreateSession() {
             </div>
           )}
         </div>
+        )}
 
         {/* Action Buttons */}
         <div className="space-y-3 pt-4">
@@ -475,7 +475,9 @@ export default function CreateSession() {
           {/* Info Box */}
           <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-3">
             <p className="text-xs text-blue-300">
-              💡 After creating the session, you can choose to start AI Auto-Play or User Gameplay mode
+              {sessionType === 'learning' 
+                ? '💡 Learning session will process the uploaded training video offline (no device needed)'
+                : '💡 Playing session will use learned knowledge + AI intelligence to play the game on selected device'}
             </p>
           </div>
 

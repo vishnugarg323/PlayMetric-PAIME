@@ -14,6 +14,7 @@ export default function Games() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [genre, setGenre] = useState('')
   const [apkFile, setApkFile] = useState<File | null>(null)
+  const [videoFile, setVideoFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
 
   const { data: games, isLoading } = useQuery({
@@ -32,6 +33,11 @@ export default function Games() {
       const formData = new FormData()
       formData.append('apk', apkFile)
       formData.append('genre', genre)
+      
+      // Add optional training video
+      if (videoFile) {
+        formData.append('training_video', videoFile)
+      }
 
       const response = await fetch('/api/games/upload', {
         method: 'POST',
@@ -47,6 +53,7 @@ export default function Games() {
       setShowCreateModal(false)
       setGenre('')
       setApkFile(null)
+      setVideoFile(null)
     } catch (error: any) {
       alert(`Upload failed: ${error.message}`)
     } finally {
@@ -189,6 +196,32 @@ export default function Games() {
                   </p>
                 )}
               </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Training Video (Optional)
+                </label>
+                <input
+                  type="file"
+                  accept="video/*,.mp4,.avi,.mov,.mkv"
+                  onChange={(e) => setVideoFile(e.target.files?.[0] || null)}
+                  className="block w-full text-sm text-slate-400
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-lg file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-blue-600 file:text-white
+                    hover:file:bg-blue-700
+                    file:cursor-pointer cursor-pointer
+                  "
+                />
+                {videoFile && (
+                  <p className="mt-2 text-sm text-slate-400">
+                    Selected: {videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(2)} MB)
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-slate-500">
+                  Upload gameplay video for AI to learn from (applies to all versions of this game)
+                </p>
+              </div>
               <div className="flex space-x-3 mt-6">
                 <Button 
                   variant="ghost" 
@@ -196,6 +229,7 @@ export default function Games() {
                     setShowCreateModal(false)
                     setGenre('')
                     setApkFile(null)
+                    setVideoFile(null)
                   }}
                   className="flex-1"
                   disabled={uploading}

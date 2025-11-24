@@ -1,8 +1,0 @@
-# Agent-specific dependencies (base-ml already has: fastapi, uvicorn, pydantic, httpx, asyncpg, numpy, opencv, pillow, torch, scikit-image, scikit-learn, pytesseract, imagehash)
-
-# Database
-sqlalchemy==2.0.23
-redis==5.1.0
-
-# Vision AI (agent calls Vision Service, doesn't load LLaVA itself)
-google-generativeai==0.3.2

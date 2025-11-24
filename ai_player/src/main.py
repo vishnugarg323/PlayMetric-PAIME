@@ -23,6 +23,9 @@ from PIL import Image
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import sys
+sys.path.append('/app')
+from shared.game_registry import get_registry
 
 # Setup logging
 logging.basicConfig(
@@ -538,9 +541,40 @@ async def health():
 
 @app.post("/play")
 async def start_playing(request: PlayRequest):
-    """Start AI gameplay"""
+    """
+    Start AI gameplay using learned knowledge
+    
+    The game_name must match a game that has:
+    1. Uploaded video and learned knowledge base
+    2. Linked APK with package name
+    """
     if player_state["status"] == "playing":
         raise HTTPException(status_code=409, detail="Already playing")
+    
+    # Check if game is ready
+    registry = get_registry()
+    game = registry.get_game(request.game_name)
+    
+    if not game:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Game '{request.game_name}' not found. Upload gameplay video first to create knowledge base."
+        )
+    
+    if not registry.is_ready_to_play(request.game_name):
+        missing = []
+        if not game["apk"]["package_name"]:
+            missing.append("APK not linked - upload and link APK first")
+        if not game["knowledge"]["base_path"]:
+            missing.append("No knowledge base - upload gameplay video first")
+        
+        raise HTTPException(
+            status_code=400,
+            detail=f"Game not ready to play. Missing: {', '.join(missing)}"
+        )
+    
+    # Update status
+    registry.update_status(request.game_name, "playing")
     
     # Start playing in background
     asyncio.create_task(
@@ -555,7 +589,10 @@ async def start_playing(request: PlayRequest):
     return {
         "message": "AI started playing",
         "game_name": request.game_name,
-        "use_gemini": request.use_gemini
+        "game_info": game,
+        "use_gemini": request.use_gemini,
+        "knowledge_base": game["knowledge"]["base_path"],
+        "package_name": game["apk"]["package_name"]
     }
 
 

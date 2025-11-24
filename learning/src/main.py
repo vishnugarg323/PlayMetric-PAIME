@@ -22,9 +22,13 @@ import numpy as np
 from PIL import Image
 import aiofiles
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import sys
+sys.path.append('/app')
+from shared.game_registry import get_registry
+from shared.database import DatabaseManager
 
 # Setup logging
 logging.basicConfig(
@@ -34,6 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Global state
+db_manager: Optional[DatabaseManager] = None
 learning_state = {
     "status": "idle",  # idle, processing, complete, error
     "video_path": None,
@@ -331,6 +336,36 @@ async def process_video_learning(video_path: str, game_name: str):
             
             learning_state["current_analysis"] = analysis
             
+            # Store frame analysis in database
+            try:
+                await db_manager.execute_write(
+                    """
+                    INSERT INTO learning_actions (
+                        game_id, timestamp, action_type, action_params,
+                        screenshot_before, detected_text, ui_elements,
+                        reward, success, led_to_progress, metadata
+                    ) VALUES ($1, NOW(), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    """,
+                    game_name,
+                    analysis.get("action_type", "observation"),
+                    json.dumps(analysis.get("vision", {})),
+                    frame_path,
+                    analysis.get("ocr", {}).get("full_text", ""),
+                    json.dumps(analysis.get("ocr", {}).get("buttons", [])),
+                    1.0 if analysis.get("insights") else 0.5,  # reward based on insights
+                    True,
+                    bool(analysis.get("insights")),
+                    json.dumps({
+                        "frame_index": idx,
+                        "total_frames": len(frame_paths),
+                        "scene_type": analysis.get("vision", {}).get("scene_type"),
+                        "insights": analysis.get("insights", [])
+                    })
+                )
+                logger.debug(f"💾 Stored frame {idx} analysis in database")
+            except Exception as e:
+                logger.error(f"Failed to store frame analysis: {e}")
+            
             # Extract knowledge
             if analysis.get("ocr", {}).get("buttons"):
                 for button in analysis["ocr"]["buttons"]:
@@ -370,6 +405,24 @@ async def process_video_learning(video_path: str, game_name: str):
         learning_state["knowledge_base"] = knowledge_base.current_kb
         learning_state["status"] = "complete"
         
+        # Step 4: Register knowledge base in game registry
+        try:
+            registry = get_registry()
+            stats = {
+                "scenes": len(knowledge_base.current_kb.get("scene_types", {})),
+                "buttons": len(knowledge_base.current_kb.get("button_locations", {})),
+                "strategies": len(knowledge_base.current_kb.get("strategies", []))
+            }
+            registry.link_video_learning(
+                game_id=game_name,
+                video_path=video_path,
+                knowledge_base_path=str(kb_file),
+                stats=stats
+            )
+            logger.info(f"🔗 Linked knowledge base to game registry: {game_name}")
+        except Exception as e:
+            logger.warning(f"Failed to link to game registry: {e}")
+        
         await broadcast_update({
             "type": "complete",
             "status": "complete",
@@ -395,8 +448,20 @@ async def process_video_learning(video_path: str, game_name: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
+    global db_manager
+    
     logger.info("🚀 Learning Service starting...")
+    
+    # Initialize database
+    db_manager = DatabaseManager()
+    await db_manager.connect()
+    logger.info("✅ Database connected")
+    
     yield
+    
+    # Cleanup
+    if db_manager:
+        await db_manager.disconnect()
     logger.info("👋 Learning Service shutting down...")
 
 
@@ -414,31 +479,57 @@ async def health():
 
 
 @app.post("/upload-video")
-async def upload_video(file: UploadFile = File(...), game_name: str = "unknown_game"):
-    """Upload gameplay video for learning"""
+async def upload_video(
+    file: UploadFile = File(...), 
+    game_id: str = Form(...),
+    display_name: str = Form(None),
+    package_name: str = Form(None)
+):
+    """
+    Upload gameplay video for learning
+    
+    Args:
+        file: Video file (MP4, AVI, etc.)
+        game_id: Unique game identifier (e.g., "subway_surfers")
+        display_name: Human-readable name (e.g., "Subway Surfers")
+        package_name: Android package name (optional, can link later)
+    """
     if learning_state["status"] == "processing":
         raise HTTPException(status_code=409, detail="Already processing a video")
     
     try:
+        registry = get_registry()
+        
+        # Register or get existing game
+        game = registry.get_game(game_id)
+        if not game:
+            registry.register_game(
+                game_id=game_id,
+                display_name=display_name or game_id,
+                package_name=package_name,
+                metadata={"source": "video_upload"}
+            )
+        
         # Save uploaded video
         video_dir = Path("/data/videos")
         video_dir.mkdir(parents=True, exist_ok=True)
         
-        video_path = video_dir / f"{game_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        video_path = video_dir / f"{game_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         
         async with aiofiles.open(video_path, 'wb') as f:
             content = await file.read()
             await f.write(content)
         
-        logger.info(f"📹 Video uploaded: {video_path} ({len(content)} bytes)")
+        logger.info(f"📹 Video uploaded for {game_id}: {video_path} ({len(content)} bytes)")
         
         # Start learning process in background
-        asyncio.create_task(process_video_learning(str(video_path), game_name))
+        asyncio.create_task(process_video_learning(str(video_path), game_id))
         
         return {
             "message": "Video uploaded successfully",
             "video_path": str(video_path),
-            "game_name": game_name,
+            "game_id": game_id,
+            "game_status": registry.get_game(game_id)["status"],
             "status": "processing_started"
         }
         
@@ -460,6 +551,53 @@ async def get_knowledge_base(game_name: str):
     if kb:
         return kb
     raise HTTPException(status_code=404, detail=f"No knowledge base found for {game_name}")
+
+
+@app.get("/games")
+async def list_games():
+    """List all registered games"""
+    registry = get_registry()
+    return {
+        "games": registry.list_games(),
+        "total": len(registry.games)
+    }
+
+
+@app.get("/games/{game_id}")
+async def get_game(game_id: str):
+    """Get game details"""
+    registry = get_registry()
+    game = registry.get_game(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail=f"Game {game_id} not found")
+    return game
+
+
+@app.post("/games/{game_id}/link-apk")
+async def link_apk_to_game(
+    game_id: str,
+    package_name: str = Form(...),
+    apk_path: str = Form(None),
+    version: str = Form(None)
+):
+    """Link an installed APK to a game"""
+    registry = get_registry()
+    
+    game = registry.get_game(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail=f"Game {game_id} not found. Upload video first to register game.")
+    
+    try:
+        registry.link_apk(game_id, apk_path or "", package_name, version)
+        updated_game = registry.get_game(game_id)
+        
+        return {
+            "message": "APK linked successfully",
+            "game": updated_game,
+            "ready_to_play": registry.is_ready_to_play(game_id)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/current-frame")

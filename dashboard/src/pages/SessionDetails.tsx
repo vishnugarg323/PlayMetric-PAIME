@@ -62,19 +62,11 @@ export default function SessionDetails() {
           setObservationStatus(data.observation)
         }
         
-        // Fetch user observations if in user_guided mode
-        if (data.learning_mode === 'user_guided') {
-          fetch('http://localhost:8004/play/user-observations?limit=20')
-            .then(r => r.json())
-            .then(obsData => setUserObservations(obsData.observations || []))
-            .catch(err => console.error('Failed to fetch user observations:', err))
-        }
-        
         // Fetch AI decisions if in auto_play mode
         if (data.learning_mode === 'auto_play') {
           fetch('http://localhost:8004/play/ai-decisions?limit=20')
             .then(r => r.json())
-            .then(decData => setUserObservations(decData.decisions || []))  // Reuse same state for now
+            .then(decData => setUserObservations(decData.decisions || []))
             .catch(err => console.error('Failed to fetch AI decisions:', err))
         }
       } catch (error) {
@@ -127,32 +119,7 @@ export default function SessionDetails() {
     }
   }
 
-  // Start User Gameplay Mode  
-  const handleStartUserMode = async () => {
-    try {
-      // Update session learning mode to 'user_guided'
-      await fetch(`http://localhost:8000/sessions/${sessionId}/mode`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ learning_mode: 'user_guided' })
-      })
-      
-      // Start observation mode (AI watches and learns from user)
-      await fetch('http://localhost:8004/play/observe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'user_guided' })
-      })
-      
-      // Refetch session to update status
-      refetch()
-      
-      alert('User Gameplay mode started! AI will observe and learn from your actions.')
-    } catch (error) {
-      console.error('Failed to start User Gameplay mode:', error)
-      alert('Failed to start User Gameplay mode')
-    }
-  }
+
 
   // Pause AI handler
   const handlePauseAI = async () => {
@@ -267,18 +234,8 @@ export default function SessionDetails() {
                 {aiActive ? (
                   <>⏸️ Pause AI</>
                 ) : (
-                  <>🤖 Start AI Auto-Play</>
+                  <>🤖 Start AI Playing</>
                 )}
-              </Button>
-              
-              {/* User Gameplay Button */}
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleStartUserMode}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                👤 Start User Gameplay
               </Button>
               
               <Button variant="danger" size="sm">

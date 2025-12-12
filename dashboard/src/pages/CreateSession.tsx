@@ -29,6 +29,7 @@ interface CreateSessionData {
   game_id: string
   version_id: string
   agent_mode: string
+  session_type: string  // 'learning' or 'playing'
   config: {
     max_duration_seconds: number
     max_actions: number
@@ -37,6 +38,8 @@ interface CreateSessionData {
     device_mode: string
     device_ip: string
     learning_mode: string
+    session_type: string  // Also in config for backward compatibility
+    video_id?: string  // For learning sessions
   }
 }
 
@@ -55,6 +58,7 @@ export default function CreateSession() {
 
   const [selectedGameId, setSelectedGameId] = useState<string>(preSelectedGameId || '')
   const [selectedVersionId, setSelectedVersionId] = useState<string>('')
+  const [selectedVideoId, setSelectedVideoId] = useState<string>('')
   const [sessionType, setSessionType] = useState<'learning' | 'playing'>('learning')
   const [maxDuration, setMaxDuration] = useState<number>(300)
   const [maxActions, setMaxActions] = useState<number>(1000)
@@ -63,7 +67,9 @@ export default function CreateSession() {
   const [deviceMode, setDeviceMode] = useState<'physical' | 'emulator'>('emulator')
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [availableDevices, setAvailableDevices] = useState<any[]>([])
+  const [availableVideos, setAvailableVideos] = useState<any[]>([])
   const [loadingDevices, setLoadingDevices] = useState(false)
+  const [loadingVideos, setLoadingVideos] = useState(false)
 
   const { data: games, isLoading: gamesLoading } = useQuery<Game[]>({
     queryKey: ['games'],
@@ -87,6 +93,41 @@ export default function CreateSession() {
   useEffect(() => {
     fetchAvailableDevices()
   }, [deviceMode])
+
+  // Fetch available videos when game changes (for learning mode)
+  useEffect(() => {
+    if (selectedGameId && sessionType === 'learning') {
+      fetchAvailableVideos()
+    }
+  }, [selectedGameId, sessionType])
+
+  const fetchAvailableVideos = async () => {
+    if (!selectedGameId) return
+    
+    setLoadingVideos(true)
+    try {
+      const API_BASE = (window as any).CONFIG?.API_BASE_URL || 'http://localhost:8000'
+      const response = await fetch(`${API_BASE}/games/${selectedGameId}/videos`)
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch videos: ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+      
+      setAvailableVideos(data.videos || [])
+      
+      // Auto-select first video if available
+      if (data.videos && data.videos.length > 0 && !selectedVideoId) {
+        setSelectedVideoId(data.videos[0].id)
+      }
+    } catch (error) {
+      console.error('Failed to fetch videos:', error)
+      setAvailableVideos([])
+    } finally {
+      setLoadingVideos(false)
+    }
+  }
 
   const fetchAvailableDevices = async () => {
     setLoadingDevices(true)
@@ -115,9 +156,10 @@ export default function CreateSession() {
     mutationFn: (data: CreateSessionData) =>
       sessionsApi.create(data) as Promise<SessionResponse>,
     onSuccess: (response: SessionResponse) => {
-      // Navigate to the session details page
-      // Backend returns { session_id, status, message }
-      navigate(`/sessions/${response.data.session_id}`)
+      // Navigate to unified session details page
+      // SessionDetailsNew will detect mode and show appropriate UI
+      const sessionId = response.data.session_id
+      navigate(`/sessions/${sessionId}`)
     },
     onError: (error: any) => {
       alert(`Failed to create session: ${error.response?.data?.detail || error.message}`)
@@ -130,12 +172,22 @@ export default function CreateSession() {
       return
     }
 
+    if (sessionType === 'learning' && !selectedVideoId) {
+      alert('Please select a training video for learning session')
+      return
+    }
+
     const config: any = {
       max_duration_seconds: maxDuration,
       max_actions: maxActions,
       enable_screenshots: true,
       screenshot_interval: 0.5,
       session_type: sessionType, // 'learning' or 'playing'
+    }
+
+    // Add video ID for learning sessions
+    if (sessionType === 'learning' && selectedVideoId) {
+      config.video_id = selectedVideoId
     }
 
     // Only add device info if session type is 'playing'
@@ -156,6 +208,7 @@ export default function CreateSession() {
       game_id: selectedGameId,
       version_id: selectedVersionId,
       agent_mode: 'advanced_rl', // Always use RL mode
+      session_type: sessionType,  // Send at top level for backend
       config,
     })
   }
@@ -283,41 +336,76 @@ export default function CreateSession() {
           </div>
         </div>
 
-        {/* Session Configuration */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Video Selection - Only show for 'learning' session type */}
+        {sessionType === 'learning' && selectedGameId && (
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
-              Max Duration (seconds)
+              Select Training Video
             </label>
-            <input
-              type="number"
-              value={maxDuration}
-              onChange={(e: any) => setMaxDuration(parseInt(e.target.value))}
-              min={30}
-              max={3600}
-              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-            <p className="mt-1 text-xs text-slate-400">
-              Session will stop after this duration
-            </p>
+            {loadingVideos ? (
+              <div className="text-slate-400 p-4 bg-slate-700 rounded-lg">Loading videos...</div>
+            ) : availableVideos.length === 0 ? (
+              <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-4">
+                <p className="text-sm text-yellow-300">
+                  ⚠️ No training videos found for this game
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Upload a training video first from the Games page
+                </p>
+              </div>
+            ) : (
+              <select
+                value={selectedVideoId}
+                onChange={(e) => setSelectedVideoId(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                {availableVideos.map((video: any) => (
+                  <option key={video.id} value={video.id}>
+                    {video.metadata?.title || `Video ${video.id.slice(0, 8)}`} - {video.duration_seconds ? `${video.duration_seconds.toFixed(0)}s` : 'Duration unknown'} - {video.processing_status}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Max Actions
-            </label>
-            <input
-              type="number"
-              value={maxActions}
-              onChange={(e: any) => setMaxActions(parseInt(e.target.value))}
-              min={10}
-              max={10000}
-              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-            <p className="mt-1 text-xs text-slate-400">
-              Session will stop after this many actions
-            </p>
+        )}
+
+        {/* Session Configuration - Only show for 'playing' session type */}
+        {sessionType === 'playing' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Max Duration (seconds)
+              </label>
+              <input
+                type="number"
+                value={maxDuration}
+                onChange={(e: any) => setMaxDuration(parseInt(e.target.value))}
+                min={30}
+                max={3600}
+                className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Session will stop after this duration
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Max Actions
+              </label>
+              <input
+                type="number"
+                value={maxActions}
+                onChange={(e: any) => setMaxActions(parseInt(e.target.value))}
+                min={10}
+                max={10000}
+                className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Session will stop after this many actions
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Device Mode Selection - Only show for 'playing' session type */}
         {sessionType === 'playing' && (
@@ -466,10 +554,20 @@ export default function CreateSession() {
           {/* Single Create Session Button */}
           <Button
             onClick={handleCreate}
-            disabled={!selectedGameId || !selectedVersionId || createMutation.isPending}
+            disabled={
+              !selectedGameId || 
+              !selectedVersionId || 
+              (sessionType === 'learning' && availableVideos.length === 0) ||
+              createMutation.isPending
+            }
             className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
           >
-            {createMutation.isPending ? 'Creating Session...' : 'Create Session'}
+            {createMutation.isPending 
+              ? 'Creating Session...' 
+              : sessionType === 'learning' 
+                ? '🎓 Start Learning from Video'
+                : '🎮 Start Playing Session'
+            }
           </Button>
 
           {/* Info Box */}

@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src/ ./src/
 
+# Copy database schema and scripts
+COPY db/init_db.py ./init_db.py
+COPY db/clear_db.py ./clear_db.py
+
 # Create data directories
 RUN mkdir -p /app/data
 
@@ -24,5 +28,13 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the service
-CMD ["python", "-m", "src.main"]
+# Create startup script
+RUN echo '#!/bin/bash\n\
+echo "🔧 Initializing database schema..."\n\
+python /app/init_db.py\n\
+echo "🚀 Starting orchestrator service..."\n\
+python -m src.main\n\
+' > /app/start.sh && chmod +x /app/start.sh
+
+# Run the service with initialization
+CMD ["/app/start.sh"]

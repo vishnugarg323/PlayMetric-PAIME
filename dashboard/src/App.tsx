@@ -8,7 +8,7 @@ import Games from './pages/Games'
 import GameDetails from './pages/GameDetails'
 import Sessions from './pages/Sessions'
 import CreateSession from './pages/CreateSession'
-import SessionDetails from './pages/SessionDetails'
+import SessionDetailsNew from './pages/SessionDetailsNew'
 import Analytics from './pages/Analytics'
 import BugTracker from './pages/BugTracker'
 import VersionComparison from './pages/VersionComparison'
@@ -35,7 +35,7 @@ function App() {
             <Route path="games/:gameId" element={<GameDetails />} />
             <Route path="sessions" element={<Sessions />} />
             <Route path="sessions/create" element={<CreateSession />} />
-            <Route path="sessions/:sessionId" element={<SessionDetails />} />
+            <Route path="sessions/:sessionId" element={<SessionDetailsNew />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="bugs" element={<BugTracker />} />
             <Route path="version-comparison" element={<VersionComparison />} />

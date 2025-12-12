@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { sessionsApi } from '../common/api'
-import { Play, Square, Trash2, Eye, Clock } from 'lucide-react'
+import { Play, Square, Trash2, Eye, Clock, GraduationCap, Gamepad2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Button from '../components/Button'
 import Loading from '../components/Loading'
@@ -33,9 +33,9 @@ export default function Sessions() {
 
   if (isLoading) return <Loading text="Loading sessions..." />
 
-  const runningSessions = sessions?.filter(s => s.status === 'running') || []
-  const completedSessions = sessions?.filter(s => s.status === 'completed') || []
-  const failedSessions = sessions?.filter(s => s.status === 'failed') || []
+  const runningSessions = sessions?.filter((s: any) => s.status === 'running') || []
+  const completedSessions = sessions?.filter((s: any) => s.status === 'completed') || []
+  const failedSessions = sessions?.filter((s: any) => s.status === 'failed') || []
 
   return (
     <div className="space-y-6">
@@ -78,7 +78,7 @@ export default function Sessions() {
         />
       ) : (
         <div className="space-y-4">
-          {sessions?.map(session => (
+          {sessions?.map((session: any) => (
             <div key={session.id} className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-primary-500 transition-colors">
               <div className="flex items-start justify-between mb-4">
                 <div className="flex-1">
@@ -86,6 +86,21 @@ export default function Sessions() {
                     <h3 className="text-lg font-semibold text-white">
                       Session {session.id.substring(0, 8)}
                     </h3>
+                    
+                    {/* Session Type Badge */}
+                    {session.session_type === 'learning' ? (
+                      <span className="px-2 py-1 rounded text-xs font-medium bg-purple-600 text-white flex items-center gap-1">
+                        <GraduationCap className="w-3 h-3" />
+                        Learning
+                      </span>
+                    ) : (
+                      <span className="px-2 py-1 rounded text-xs font-medium bg-blue-600 text-white flex items-center gap-1">
+                        <Gamepad2 className="w-3 h-3" />
+                        Playing
+                      </span>
+                    )}
+                    
+                    {/* Status Badge */}
                     <span className={`px-2 py-1 rounded text-xs font-medium ${
                       session.status === 'running' ? 'bg-green-600 text-white' :
                       session.status === 'completed' ? 'bg-blue-600 text-white' :
@@ -95,7 +110,14 @@ export default function Sessions() {
                       {session.status}
                     </span>
                   </div>
-                  <p className="text-sm text-slate-400">{session.agent_mode} mode</p>
+                  <p className="text-sm text-slate-400">
+                    {session.agent_mode} mode
+                    {session.learning_progress && (
+                      <span className="ml-2 text-purple-400">
+                        • {session.learning_progress.videos_completed}/{session.learning_progress.total_training_videos} videos processed
+                      </span>
+                    )}
+                  </p>
                 </div>
                 <div className="flex items-center space-x-2">
                   {session.status === 'running' && (

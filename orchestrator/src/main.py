@@ -6,6 +6,7 @@ import asyncio
 import sys
 import logging
 import json
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Body, Form
 from fastapi.responses import JSONResponse
@@ -54,6 +55,7 @@ class CreateSessionRequest(BaseModel):
     game_id: str
     version_id: str
     agent_mode: str = "advanced_rl"
+    session_type: str = "playing"  # "learning" (video analysis only) or "playing" (device + APK)
     config: Optional[Dict] = None
     priority: str = "normal"  # low, normal, high, urgent
 
@@ -66,6 +68,11 @@ class UpdateBugRequest(BaseModel):
     status: Optional[str] = None
     assigned_to: Optional[str] = None
     resolution_notes: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 # Lifespan context manager
@@ -259,7 +266,7 @@ async def get_game_versions(game_id: str):
     return versions
 
 
-@app.post("/games/upload")
+@app.post("/api/games/upload")
 async def upload_game_apk(
     genre: str = Form(...), 
     apk: UploadFile = File(...),
@@ -312,30 +319,51 @@ async def upload_game_apk(
         
         # Handle optional training video
         video_saved = False
-        video_path = None
+        video_id = None
         if training_video:
             try:
                 # Save training video to data/videos/{package_name}/
                 video_dir = f"/data/videos/{package_name}"
                 os.makedirs(video_dir, exist_ok=True)
-                video_path = f"{video_dir}/training_video_{int(time.time())}.mp4"
+                
+                timestamp = int(time.time())
+                video_filename = f"training_{timestamp}_{training_video.filename}"
+                video_path = f"{video_dir}/{video_filename}"
+                
+                video_content = await training_video.read()
+                video_size = len(video_content)
                 
                 with open(video_path, "wb") as video_file:
-                    video_content = await training_video.read()
                     video_file.write(video_content)
                 
-                video_saved = True
-                logger.info(f"Saved training video for {package_name} at {video_path}")
+                logger.info(f"📹 Saved training video: {video_path} ({video_size} bytes)")
                 
-                # Store video path in database
-                await db_manager.execute(
-                    """UPDATE games 
-                       SET training_video_path = $1, updated_at = NOW()
-                       WHERE id = $2""",
-                    video_path, game_id
+                # Store in video_demonstrations table
+                import json
+                video_record = await db_manager.execute_one(
+                    """
+                    INSERT INTO video_demonstrations (
+                        game_id, video_path, processing_status, metadata
+                    ) VALUES ($1, $2, 'pending', $3::jsonb)
+                    RETURNING id
+                    """,
+                    game_id, 
+                    video_path,
+                    json.dumps({
+                        "filename": video_filename,
+                        "size_bytes": video_size,
+                        "title": f"Training Video {timestamp}",
+                        "package_name": package_name,
+                        "uploaded_by": "api_user"
+                    })
                 )
+                
+                video_id = str(video_record['id'])
+                video_saved = True
+                logger.info(f"✅ Created video demonstration record: {video_id}")
+                
             except Exception as e:
-                logger.error(f"Failed to save training video: {e}")
+                logger.error(f"Failed to save training video: {e}", exc_info=True)
         
         return {
             "message": "Game and APK uploaded successfully",
@@ -343,7 +371,7 @@ async def upload_game_apk(
             "display_name": display_name,
             "package_name": package_name,
             "training_video_saved": video_saved,
-            "training_video_path": video_path if video_saved else None,
+            "video_id": video_id if video_saved else None,
             **result
         }
         
@@ -458,6 +486,354 @@ async def get_version_comparison(game_id: str, version_id: str):
 
 
 # ==============================================================================
+# VIDEO LEARNING ENDPOINTS (Professional multi-video learning system)
+# ==============================================================================
+
+@app.post("/games/{game_id}/videos/upload")
+async def upload_training_video(
+    game_id: str,
+    video: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    gameplay_level: Optional[str] = Form(None),
+    player_skill_level: str = Form("intermediate"),
+    demonstration_type: str = Form("tutorial"),
+    auto_analyze: bool = Form(True)
+):
+    """
+    📹 Upload training video for AI learning (game-level, not version-specific)
+    
+    Multiple videos can be uploaded for the same game - AI learns collectively from all videos.
+    Videos can be uploaded at any time, independent of APK uploads.
+    
+    Args:
+        game_id: Game UUID
+        video: Video file (MP4, AVI, MOV, etc.)
+        title: Video title (optional)
+        description: What this video demonstrates (optional)
+        gameplay_level: Which level/stage (e.g., "Level 1-5", "Tutorial")
+        player_skill_level: beginner | intermediate | expert (default: intermediate)
+        demonstration_type: tutorial | speedrun | exploration | bug_reproduction
+        auto_analyze: Start analysis immediately (default: True)
+    """
+    try:
+        # Verify game exists
+        game = await db_manager.execute_one(
+            "SELECT id, package_name, display_name FROM games WHERE id = $1",
+            game_id
+        )
+        
+        if not game:
+            raise HTTPException(status_code=404, detail=f"Game not found")
+        
+        # Save video to permanent location
+        video_dir = f"/data/videos/{game['package_name']}"
+        os.makedirs(video_dir, exist_ok=True)
+        
+        timestamp = int(time.time())
+        video_filename = f"training_{timestamp}_{video.filename}"
+        video_path = os.path.join(video_dir, video_filename)
+        
+        # Save uploaded file
+        video_content = await video.read()
+        video_size = len(video_content)
+        
+        with open(video_path, "wb") as f:
+            f.write(video_content)
+        
+        logger.info(f"📹 Saved training video: {video_path} ({video_size} bytes)")
+        
+        # Create video_demonstrations record with schema columns
+        import json
+        video_id = await db_manager.execute_one(
+            """
+            INSERT INTO video_demonstrations (
+                game_id, video_path, processing_status, metadata
+            ) VALUES ($1, $2, 'pending', $3::jsonb)
+            RETURNING id
+            """,
+            game_id, 
+            video_path,
+            json.dumps({
+                "filename": video_filename,
+                "size_bytes": video_size,
+                "title": title or f"Training Video {timestamp}",
+                "description": description,
+                "gameplay_level": gameplay_level,
+                "player_skill_level": player_skill_level,
+                "demonstration_type": demonstration_type,
+                "package_name": game['package_name'],
+                "uploaded_by": "api_user"
+            })
+        )
+        
+        video_id = str(video_id['id'])
+        logger.info(f"✅ Created video demonstration record: {video_id}")
+        
+        # Trigger analysis if requested
+        analysis_started = False
+        if auto_analyze:
+            try:
+                learning_url = os.getenv("LEARNING_SERVICE_URL", "http://learning:8007")
+                response = await http_client.post(
+                    f"{learning_url}/videos/{video_id}/analyze",
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    analysis_started = True
+                    logger.info(f"🔄 Video analysis started for {video_id}")
+                else:
+                    logger.warning(f"Failed to start analysis: {response.status_code}")
+            except Exception as e:
+                logger.error(f"Failed to trigger analysis: {e}")
+        
+        # Get total video count for this game
+        video_count = await db_manager.execute_one(
+            "SELECT COUNT(*) as count FROM video_demonstrations WHERE game_id = $1",
+            game_id
+        )
+        
+        return {
+            "message": "Training video uploaded successfully",
+            "video_id": video_id,
+            "game_id": game_id,
+            "game_name": game['display_name'],
+            "video_path": video_path,
+            "video_filename": video_filename,
+            "video_size_bytes": video_size,
+            "total_videos_for_game": video_count['count'],
+            "analysis_started": analysis_started,
+            "status": "analyzing" if analysis_started else "pending"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video upload failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/games/{game_id}/videos")
+async def list_training_videos(game_id: str):
+    """
+    📋 List all training videos for a game
+    
+    Shows processing status, metadata, and learning contributions of each video.
+    """
+    try:
+        videos = await db_manager.execute(
+            """
+            SELECT 
+                id, video_path, duration_seconds, frame_count,
+                fps, resolution, processing_status, 
+                total_actions_extracted, total_frames_analyzed,
+                levels_demonstrated, actions_by_type, success_rate,
+                uploaded_at, processed_at, metadata
+            FROM video_demonstrations
+            WHERE game_id = $1
+            ORDER BY uploaded_at DESC
+            """,
+            game_id
+        )
+        
+        return {
+            "game_id": game_id,
+            "total_videos": len(videos),
+            "videos": videos
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list videos: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/games/{game_id}/videos/{video_id}")
+async def delete_training_video(game_id: str, video_id: str):
+    """
+    🗑️ Delete a specific training video
+    
+    Removes video file and all associated analysis data.
+    """
+    try:
+        # Get video details
+        video = await db_manager.execute_one(
+            "SELECT video_path FROM video_demonstrations WHERE id = $1 AND game_id = $2",
+            video_id, game_id
+        )
+        
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        # Delete video file if exists
+        if video['video_path'] and os.path.exists(video['video_path']):
+            os.remove(video['video_path'])
+            logger.info(f"🗑️ Deleted video file: {video['video_path']}")
+        
+        # Delete from database (CASCADE will handle related records)
+        await db_manager.execute(
+            "DELETE FROM video_demonstrations WHERE id = $1",
+            video_id
+        )
+        
+        logger.info(f"✅ Deleted video demonstration: {video_id}")
+        
+        return {
+            "message": "Training video deleted successfully",
+            "video_id": video_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete video: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/games/{game_id}/analyze")
+async def trigger_video_analysis(game_id: str, video_id: Optional[str] = None):
+    """
+    Manually trigger video analysis for a game
+    
+    Args:
+        game_id: Game UUID
+        video_id: Specific video ID (optional, uses latest if not provided)
+    
+    Returns:
+        Analysis status
+    """
+    try:
+        # If no video_id provided, get latest pending video
+        if not video_id:
+            latest_video = await db_manager.execute_one(
+                """
+                SELECT id FROM video_demonstrations
+                WHERE game_id = $1 AND processing_status IN ('pending', 'failed')
+                ORDER BY uploaded_at DESC
+                LIMIT 1
+                """,
+                game_id
+            )
+            
+            if not latest_video:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No pending videos found for this game"
+                )
+            
+            video_id = str(latest_video['id'])
+        
+        # Trigger analysis
+        learning_url = os.getenv("LEARNING_SERVICE_URL", "http://learning:8007")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{learning_url}/videos/{video_id}/analyze",
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return {
+                    "message": "Video analysis started",
+                    "video_id": video_id,
+                    "game_id": game_id,
+                    **result
+                }
+            else:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Learning service error: {response.text}"
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to trigger analysis: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/games/{game_id}/knowledge")
+async def get_game_knowledge(
+    game_id: str,
+    pattern_type: Optional[str] = None,
+    min_confidence: float = 0.0
+):
+    """
+    Get learned knowledge patterns for a game
+    
+    Args:
+        game_id: Game UUID
+        pattern_type: Filter by type (tap_button, ui_interaction, sequence, recovery)
+        min_confidence: Minimum confidence score (0.0-1.0)
+    
+    Returns:
+        List of learned patterns
+    """
+    try:
+        learning_url = os.getenv("LEARNING_SERVICE_URL", "http://learning:8007")
+        
+        params = {"min_confidence": min_confidence}
+        if pattern_type:
+            params["pattern_type"] = pattern_type
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{learning_url}/games/{game_id}/knowledge",
+                params=params,
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Learning service error: {response.text}"
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get knowledge: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/games/{game_id}/learning-status")
+async def get_learning_status(game_id: str):
+    """
+    Get learning status for a game (videos processed, knowledge stats)
+    
+    Args:
+        game_id: Game UUID
+    
+    Returns:
+        Learning progress and statistics
+    """
+    try:
+        learning_url = os.getenv("LEARNING_SERVICE_URL", "http://learning:8007")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{learning_url}/games/{game_id}/learning-status",
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Learning service error: {response.text}"
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get learning status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==============================================================================
 # SESSION MANAGEMENT ENDPOINTS
 # ==============================================================================
 
@@ -483,7 +859,13 @@ async def list_sessions(game_id: Optional[str] = None, status: Optional[str] = N
 
 @app.post("/sessions")
 async def create_session(request: CreateSessionRequest):
-    """Create new session (queued for execution)"""
+    """
+    Create new session (queued for execution)
+    
+    Session Types:
+    - 'learning': AI learns from uploaded training videos (no device needed)
+    - 'playing': AI plays the game on a real device (requires device + APK)
+    """
     # Map priority string to enum
     priority_map = {
         'low': SessionPriority.LOW,
@@ -499,6 +881,17 @@ async def create_session(request: CreateSessionRequest):
         import uuid
         uuid.UUID(request.version_id)
         game_version_id = request.version_id
+        
+        # Get game_id from version
+        version = await db_manager.execute_one(
+            "SELECT game_id FROM game_versions WHERE id = $1",
+            game_version_id
+        )
+        if not version:
+            raise HTTPException(status_code=404, detail="Game version not found")
+        
+        actual_game_id = str(version['game_id'])
+        
     except (ValueError, AttributeError):
         # version_id is not a UUID, need to create game and version
         # Check if game exists
@@ -515,25 +908,47 @@ async def create_session(request: CreateSessionRequest):
                    RETURNING id""",
                 request.game_id, f"com.game.{request.game_id}", f"Game {request.game_id}"
             )
-            game_id = game_id['id']
+            actual_game_id = str(game_id['id'])
         else:
-            game_id = game['id']
+            actual_game_id = str(game['id'])
         
         # Create game version
         version_result = await db_manager.execute_one(
             """INSERT INTO game_versions (game_id, version_name, version_code, apk_path)
                VALUES ($1, $2, 1, '')
                RETURNING id""",
-            game_id, request.version_id or 'v1.0'
+            actual_game_id, request.version_id or 'v1.0'
         )
         game_version_id = version_result['id']
+    
+    # ===== VALIDATE LEARNING SESSION =====
+    if request.session_type == 'learning':
+        # Check if game has training videos
+        video_count = await db_manager.execute_one(
+            """SELECT COUNT(*) as count FROM video_demonstrations 
+               WHERE game_id = $1 AND processing_status IN ('completed', 'pending', 'processing')""",
+            actual_game_id
+        )
+        
+        if video_count['count'] == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot create learning session: No training videos uploaded for this game. "
+                       f"Please upload at least one training video first using POST /games/{actual_game_id}/videos/upload"
+            )
+        
+        logger.info(f"✅ Learning session validation passed: {video_count['count']} training video(s) available")
+    
+    # Store session_type in config
+    session_config = request.config or {}
+    session_config['session_type'] = request.session_type
     
     # Create session in database
     session_id = await db_manager.execute_one(
         """INSERT INTO sessions (game_version_id, agent_mode, status, config)
            VALUES ($1, $2, 'queued', $3)
            RETURNING id""",
-        game_version_id, request.agent_mode, json.dumps(request.config) if request.config else '{}'
+        game_version_id, request.agent_mode, json.dumps(session_config)
     )
     
     session_id = session_id['id']
@@ -609,13 +1024,57 @@ async def delete_session(session_id: str):
 
 @app.get("/sessions/{session_id}")
 async def get_session(session_id: str):
-    """Get session details"""
+    """
+    Get session details with enhanced information
+    
+    Returns session_type, video learning progress for learning sessions,
+    and device info for playing sessions.
+    """
     session = await db_manager.execute_one(
-        "SELECT * FROM sessions WHERE id = $1", session_id
+        """SELECT s.*, gv.game_id 
+           FROM sessions s
+           LEFT JOIN game_versions gv ON s.game_version_id = gv.id
+           WHERE s.id = $1""", 
+        session_id
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session
+    
+    # Parse config to get session_type
+    config = json.loads(session.get('config', '{}')) if isinstance(session.get('config'), str) else (session.get('config') or {})
+    session_type = config.get('session_type', 'playing')
+    
+    # Enhanced response with session_type
+    response = {
+        **session,
+        "session_type": session_type,
+        "config": config
+    }
+    
+    # Add learning-specific information for learning sessions
+    if session_type == 'learning' and session.get('game_id'):
+        video_stats = await db_manager.execute_one(
+            """SELECT 
+                COUNT(*) as total_videos,
+                COUNT(*) FILTER (WHERE processing_status = 'completed') as videos_completed,
+                COUNT(*) FILTER (WHERE processing_status = 'processing') as videos_processing,
+                SUM(total_frames_analyzed) as total_frames,
+                SUM(total_actions_extracted) as total_patterns
+               FROM video_demonstrations 
+               WHERE game_id = $1""",
+            str(session['game_id'])
+        )
+        
+        response['learning_progress'] = {
+            'total_training_videos': video_stats['total_videos'] or 0,
+            'videos_completed': video_stats['videos_completed'] or 0,
+            'videos_processing': video_stats['videos_processing'] or 0,
+            'frames_analyzed': video_stats['total_frames'] or 0,
+            'patterns_learned': video_stats['total_patterns'] or 0,
+            'learning_mode': 'multi-video collective learning'
+        }
+    
+    return response
 
 
 @app.delete("/games/package/{package_name}")
@@ -1047,7 +1506,7 @@ async def broadcast_ai_thinking(data: dict = Body(...)):
 
 @app.post("/internal/session/setup")
 async def setup_session(session_id: str):
-    """Setup session: connect device, install APK and launch app"""
+    """Setup session: for 'playing' sessions - connect device, install APK and launch app. For 'learning' sessions - trigger video analysis only."""
     try:
         # Get session details
         session = await db_manager.execute_one(
@@ -1055,6 +1514,13 @@ async def setup_session(session_id: str):
         )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get session config to check session_type
+        config = json.loads(session.get('config', '{}')) if isinstance(session.get('config'), str) else (session.get('config') or {})
+        session_type = config.get('session_type', 'playing')  # Default to 'playing' for backward compatibility
+        
+        # CRITICAL DEBUG: Log the session type check
+        logger.info(f"🔍 DEBUG session {session_id}: session_type='{session_type}', type={type(session_type)}, equals_learning={session_type == 'learning'}")
         
         # Get game version details
         version = await db_manager.execute_one(
@@ -1070,131 +1536,216 @@ async def setup_session(session_id: str):
         if not game:
             raise HTTPException(status_code=404, detail="Game not found")
         
-        emulator_manager_url = os.getenv("EMULATOR_MANAGER_URL", "http://emulator-manager:8005")
-        
-        # === STEP 1: CONNECT TO DEVICE ===
-        # Get device configuration from session config
-        config = json.loads(session.get('config', '{}')) if isinstance(session.get('config'), str) else (session.get('config') or {})
-        device_mode = config.get('device_mode', 'emulator')
-        device_ip = config.get('device_ip', None)
-        
-        logger.info(f"Connecting to device for session {session_id}: mode={device_mode}, ip={device_ip}")
-        
-        try:
-            # Get allocated device from resource manager if available
-            allocated_resource = multi_session_orchestrator.resource_manager.allocated_resources.get(session_id)
-            allocated_device_id = allocated_resource.emulator_id if allocated_resource else None
+        # ===== LEARNING SESSION: Video Analysis Only =====
+        if session_type == 'learning':
+            logger.info(f"🎓 Setting up LEARNING session {session_id} - multi-video analysis, no device needed")
             
-            device_config = {
-                "device_mode": device_mode,
-                "port": 5555
-            }
-            
-            if device_mode == 'physical':
-                if device_ip and device_ip != 'localhost':
-                    device_config["device_ip"] = device_ip
-                elif allocated_device_id and ':' in allocated_device_id:
-                    # Use allocated physical device (format: IP:port)
-                    device_config["device_ip"] = allocated_device_id.split(':')[0]
-                    logger.info(f"Using allocated physical device: {allocated_device_id}")
-                else:
-                    # Auto-detect first available physical device
-                    logger.info("Auto-detecting physical device...")
-                    devices_response = await http_client.get(
-                        f"{emulator_manager_url}/devices/available"
-                    )
-                    devices_data = devices_response.json()
-                    physical_devices = [d for d in devices_data.get('devices', []) if d['device_mode'] == 'physical']
-                    
-                    if physical_devices:
-                        first_device = physical_devices[0]
-                        device_ip = first_device['device_id'].split(':')[0] if ':' in first_device['device_id'] else first_device['device_id']
-                        logger.info(f"Found physical device: {first_device['device_id']} ({first_device.get('model', 'Unknown')})")
-                        device_config["device_ip"] = device_ip
-                    else:
-                        raise Exception("No physical device found. Please connect a device via ADB")
-                        
-            elif device_mode == 'emulator':
-                # Use allocated emulator if available, otherwise let emulator-manager auto-select
-                if allocated_device_id and allocated_device_id.startswith('emulator-'):
-                    device_config["emulator_name"] = allocated_device_id
-                    logger.info(f"Using allocated emulator: {allocated_device_id}")
-                else:
-                    device_config["emulator_name"] = config.get('emulator_name', None)  # Auto-select if None
-            
-            # Connect to device
-            connect_response = await http_client.post(
-                f"{emulator_manager_url}/device/connect",
-                json=device_config,
-                timeout=30.0
+            # Get all completed/pending training videos for this game
+            videos = await db_manager.execute(
+                """SELECT id, video_path, processing_status 
+                   FROM video_demonstrations 
+                   WHERE game_id = $1 AND processing_status IN ('completed', 'pending', 'processing')
+                   ORDER BY uploaded_at ASC""",
+                str(version['game_id'])
             )
-            device_info = connect_response.json()
-            logger.info(f"✅ Device connected: {device_info.get('device_id')} ({device_info.get('model', 'Unknown')})")
             
-        except Exception as e:
-            error_msg = f"Device connection failed: {str(e)}"
-            logger.error(error_msg)
+            if not videos or len(videos) == 0:
+                error_msg = "No training videos found for this game. Upload at least one training video first."
+                logger.error(error_msg)
+                await db_manager.execute_write(
+                    "UPDATE sessions SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1",
+                    session_id, error_msg
+                )
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            logger.info(f"📹 Found {len(videos)} training video(s) for game {game['display_name']}")
+            
+            # Trigger video analysis via learning service for ALL videos
+            learning_url = os.getenv("LEARNING_SERVICE_URL", "http://learning:8007")
+            try:
+                video_ids_analyzed = []
+                
+                for video in videos:
+                    # Only analyze pending videos, skip already completed ones
+                    if video['processing_status'] != 'completed':
+                        analysis_response = await http_client.post(
+                            f"{learning_url}/videos/analyze",
+                            json={
+                                "video_id": str(video['id']),
+                                "session_id": str(session_id),
+                                "game_id": str(version['game_id']),
+                                "package_name": game['package_name'],
+                                "video_path": video['video_path']
+                            },
+                            timeout=300.0  # 5 minutes for video analysis
+                        )
+                        
+                        if analysis_response.status_code == 200:
+                            video_ids_analyzed.append(str(video['id']))
+                            logger.info(f"✅ Video analysis started for: {video['id']}")
+                        else:
+                            logger.warning(f"⚠️ Failed to analyze video {video['id']}: {analysis_response.text}")
+                    else:
+                        logger.info(f"⏭️ Skipping already processed video: {video['id']}")
+                
+                # Update session status to running
+                await db_manager.execute_write(
+                    "UPDATE sessions SET status = 'running', started_at = NOW() WHERE id = $1",
+                    session_id
+                )
+                
+                logger.info(f"✅ Learning session {session_id} started: {len(video_ids_analyzed)} videos queued for analysis")
+                
+                return {
+                    "status": "setup_complete",
+                    "session_id": session_id,
+                    "session_type": "learning",
+                    "total_training_videos": len(videos),
+                    "videos_being_analyzed": len(video_ids_analyzed),
+                    "video_ids": video_ids_analyzed,
+                    "device_required": False,
+                    "message": f"AI will learn collectively from {len(videos)} training video(s)"
+                }
+                
+            except Exception as e:
+                error_msg = f"Failed to start video analysis: {str(e)}"
+                logger.error(error_msg)
+                await db_manager.execute_write(
+                    "UPDATE sessions SET status = 'failed', error_message = $2, completed_at = NOW() WHERE id = $1",
+                    session_id, error_msg
+                )
+                raise HTTPException(status_code=500, detail=error_msg)
+        
+        else:
+            # ===== PLAYING SESSION: Device + APK Installation =====
+            logger.info(f"🎮 Setting up PLAYING session {session_id} - device connection and APK installation required")
+            
+            emulator_manager_url = os.getenv("EMULATOR_MANAGER_URL", "http://emulator-manager:8005")
+            
+            # === STEP 1: CONNECT TO DEVICE ===
+            # Get device configuration from session config
+            config = json.loads(session.get('config', '{}')) if isinstance(session.get('config'), str) else (session.get('config') or {})
+            device_mode = config.get('device_mode', 'emulator')
+            device_ip = config.get('device_ip', None)
+            
+            logger.info(f"Connecting to device for session {session_id}: mode={device_mode}, ip={device_ip}")
+            
+            try:
+                # Get allocated device from resource manager if available
+                allocated_resource = multi_session_orchestrator.resource_manager.allocated_resources.get(session_id)
+                allocated_device_id = allocated_resource.emulator_id if allocated_resource else None
+                
+                device_config = {
+                    "device_mode": device_mode,
+                    "port": 5555
+                }
+                
+                if device_mode == 'physical':
+                    if device_ip and device_ip != 'localhost':
+                        device_config["device_ip"] = device_ip
+                    elif allocated_device_id and ':' in allocated_device_id:
+                        # Use allocated physical device (format: IP:port)
+                        device_config["device_ip"] = allocated_device_id.split(':')[0]
+                        logger.info(f"Using allocated physical device: {allocated_device_id}")
+                    else:
+                        # Auto-detect first available physical device
+                        logger.info("Auto-detecting physical device...")
+                        devices_response = await http_client.get(
+                            f"{emulator_manager_url}/devices/available"
+                        )
+                        devices_data = devices_response.json()
+                        physical_devices = [d for d in devices_data.get('devices', []) if d['device_mode'] == 'physical']
+                        
+                        if physical_devices:
+                            first_device = physical_devices[0]
+                            device_ip = first_device['device_id'].split(':')[0] if ':' in first_device['device_id'] else first_device['device_id']
+                            logger.info(f"Found physical device: {first_device['device_id']} ({first_device.get('model', 'Unknown')})")
+                            device_config["device_ip"] = device_ip
+                        else:
+                            raise Exception("No physical device found. Please connect a device via ADB")
+                            
+                elif device_mode == 'emulator':
+                    # Use allocated emulator if available, otherwise let emulator-manager auto-select
+                    if allocated_device_id and allocated_device_id.startswith('emulator-'):
+                        device_config["emulator_name"] = allocated_device_id
+                        logger.info(f"Using allocated emulator: {allocated_device_id}")
+                    else:
+                        device_config["emulator_name"] = config.get('emulator_name', None)  # Auto-select if None
+                
+                # Connect to device
+                connect_response = await http_client.post(
+                    f"{emulator_manager_url}/device/connect",
+                    json=device_config,
+                    timeout=30.0
+                )
+                device_info = connect_response.json()
+                logger.info(f"✅ Device connected: {device_info.get('device_id')} ({device_info.get('model', 'Unknown')})")
+                
+            except Exception as e:
+                error_msg = f"Device connection failed: {str(e)}"
+                logger.error(error_msg)
+                await db_manager.execute_write(
+                    "UPDATE sessions SET status = 'failed', completed_at = NOW() WHERE id = $1",
+                    session_id
+                )
+                raise HTTPException(status_code=500, detail=error_msg)
+            
+            # === STEP 2: INSTALL APK ===
+            logger.info(f"Installing APK for session {session_id}: {version['apk_path']}")
+            install_response = await http_client.post(
+                f"{emulator_manager_url}/apk/install",
+                json={"apk_path": version['apk_path']}
+            )
+            
+            if install_response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to install APK")
+            
+            # === STEP 3: LAUNCH APP ===
+            logger.info(f"Launching app: {game['package_name']}")
+            launch_response = await http_client.post(
+                f"{emulator_manager_url}/app/launch",
+                json={"package_name": game['package_name']}
+            )
+            
+            if launch_response.status_code != 200:
+                error_detail = launch_response.text
+                logger.error(f"Failed to launch app. Status: {launch_response.status_code}, Response: {error_detail}")
+                raise HTTPException(status_code=500, detail=f"Failed to launch app: {error_detail}")
+            
+            # === STEP 4: UPDATE SESSION STATUS ===
             await db_manager.execute_write(
-                "UPDATE sessions SET status = 'failed', completed_at = NOW() WHERE id = $1",
+                "UPDATE sessions SET status = 'running', started_at = NOW() WHERE id = $1",
                 session_id
             )
-            raise HTTPException(status_code=500, detail=error_msg)
-        
-        # === STEP 2: INSTALL APK ===
-        logger.info(f"Installing APK for session {session_id}: {version['apk_path']}")
-        install_response = await http_client.post(
-            f"{emulator_manager_url}/apk/install",
-            json={"apk_path": version['apk_path']}
-        )
-        
-        if install_response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to install APK")
-        
-        # === STEP 3: LAUNCH APP ===
-        logger.info(f"Launching app: {game['package_name']}")
-        launch_response = await http_client.post(
-            f"{emulator_manager_url}/app/launch",
-            json={"package_name": game['package_name']}
-        )
-        
-        if launch_response.status_code != 200:
-            error_detail = launch_response.text
-            logger.error(f"Failed to launch app. Status: {launch_response.status_code}, Response: {error_detail}")
-            raise HTTPException(status_code=500, detail=f"Failed to launch app: {error_detail}")
-        
-        # === STEP 4: UPDATE SESSION STATUS ===
-        await db_manager.execute_write(
-            "UPDATE sessions SET status = 'running', started_at = NOW() WHERE id = $1",
-            session_id
-        )
-        
-        # === STEP 5: START AGENT ===
-        # Pass device config to agent
-        learning_mode = config.get('learning_mode', 'auto_play')
-        
-        agent_url = os.getenv("AGENT_URL", "http://agent:8004")
-        await http_client.post(
-            f"{agent_url}/play/start",
-            json={
-                "session_id": str(session_id),
-                "game_id": str(version['game_id']),
-                "package_name": game['package_name'],
-                "agent_mode": session['agent_mode'],
-                "learning_mode": learning_mode,
+            
+            # === STEP 5: START AGENT ===
+            # Pass device config to agent
+            learning_mode = config.get('learning_mode', 'auto_play')
+            
+            agent_url = os.getenv("AGENT_URL", "http://agent:8004")
+            await http_client.post(
+                f"{agent_url}/play/start",
+                json={
+                    "session_id": str(session_id),
+                    "game_id": str(version['game_id']),
+                    "package_name": game['package_name'],
+                    "agent_mode": session['agent_mode'],
+                    "learning_mode": learning_mode,
+                    "device_mode": device_mode,
+                    "device_ip": device_ip or "localhost"
+                }
+            )
+            
+            return {
+                "status": "setup_complete",
+                "session_id": session_id,
+                "session_type": "playing",
+                "device_connected": True,
                 "device_mode": device_mode,
-                "device_ip": device_ip or "localhost"
+                "apk_installed": True,
+                "app_launched": True,
+                "agent_started": True
             }
-        )
-        
-        return {
-            "status": "setup_complete",
-            "session_id": session_id,
-            "device_connected": True,
-            "device_mode": device_mode,
-            "apk_installed": True,
-            "app_launched": True,
-            "agent_started": True
-        }
         
     except HTTPException:
         raise
@@ -1213,21 +1764,21 @@ async def setup_session(session_id: str):
 # =====================
 
 @app.post("/api/auth/login")
-async def login(username: str = Form(...), password: str = Form(...)):
+async def login(credentials: LoginRequest):
     """Simple authentication endpoint (hardcoded credentials)"""
     try:
-        logger.info(f"Login attempt - username: {username}")
+        logger.info(f"Login attempt - username: {credentials.username}")
         
         # Hardcoded credentials for admin access
-        if username == "PlayMetric" and password == "Admin@PlayMetric@2025":
-            logger.info(f"✅ Login successful for user: {username}")
+        if credentials.username == "PlayMetric" and credentials.password == "Admin@PlayMetric@2025":
+            logger.info(f"✅ Login successful for user: {credentials.username}")
             return {
                 "authenticated": True,
-                "username": username,
+                "username": credentials.username,
                 "token": "authenticated"  # Simple token for session
             }
         else:
-            logger.warning(f"❌ Invalid login attempt - username: {username}")
+            logger.warning(f"❌ Invalid login attempt - username: {credentials.username}")
             raise HTTPException(status_code=401, detail="Invalid credentials")
     except HTTPException:
         raise
@@ -1321,4 +1872,11 @@ if __name__ == "__main__":
     host = os.getenv("API_HOST", "0.0.0.0")
     # uvicorn can run the wrapped ASGI app which will delegate HTTP
     # requests to the FastAPI app and handle Socket.IO websocket traffic.
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(
+        app, 
+        host=host, 
+        port=port,
+        timeout_keep_alive=300,  # 5 minutes for large uploads
+        limit_concurrency=1000,
+        h11_max_incomplete_event_size=1024 * 1024 * 1024  # 1GB for video uploads
+    )

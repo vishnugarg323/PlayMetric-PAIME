@@ -56,6 +56,16 @@ export interface Session {
   config?: Record<string, any>
   error_message?: string
   created_at: string
+  // New fields for learning/playing sessions
+  session_type?: 'learning' | 'playing'
+  learning_progress?: {
+    total_training_videos: number
+    videos_completed: number
+    videos_processing: number
+    frames_analyzed: number
+    patterns_learned: number
+    learning_mode: string
+  }
 }
 
 export interface Bug {

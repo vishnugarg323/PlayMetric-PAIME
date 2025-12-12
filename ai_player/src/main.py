@@ -25,7 +25,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import sys
 sys.path.append('/app')
-from shared.game_registry import get_registry
+from shared import DatabaseManager
+from src.decision_engine import HybridDecisionEngine
 
 # Setup logging
 logging.basicConfig(
@@ -35,6 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Global state
+db_manager: Optional[DatabaseManager] = None
 player_state = {
     "status": "idle",  # idle, playing, paused, error
     "game_name": None,
@@ -370,31 +372,34 @@ async def broadcast_decision(update: Dict[str, Any]):
         connected_dashboards.difference_update(disconnected)
 
 
-async def play_game_loop(game_name: str, use_gemini: bool = True, max_cycles: Optional[int] = None, cycle_delay: float = 1.0):
-    """Main AI gameplay loop"""
+async def play_game_loop(
+    game_id: str,
+    use_gemini: bool = True,
+    max_cycles: Optional[int] = None,
+    cycle_delay: float = 1.0
+):
+    """Main AI gameplay loop with hybrid decision engine"""
     global player_state
     
     try:
-        # Load knowledge base
-        kb_path = Path(f"/data/knowledge/{game_name}_knowledge.json")
-        if not kb_path.exists():
-            raise Exception(f"No knowledge base found for {game_name}")
-        
-        with open(kb_path) as f:
-            knowledge_base = json.load(f)
-        
-        player_state["knowledge_loaded"] = True
-        player_state["game_name"] = game_name
+        player_state["game_name"] = game_id
         player_state["status"] = "playing"
         player_state["start_time"] = time.time()
         
-        decision_engine = DecisionEngine(knowledge_base)
+        # Initialize hybrid decision engine
+        engine = HybridDecisionEngine(
+            game_id=game_id,
+            db_manager=db_manager,
+            vision_service_url=os.getenv("VISION_SERVICE_URL", "http://vision:8006"),
+            observation_service_url=os.getenv("OBSERVATION_SERVICE_URL", "http://observation:8001"),
+            learning_service_url=os.getenv("LEARNING_SERVICE_URL", "http://learning:8007")
+        )
         
         await broadcast_decision({
             "type": "status",
             "status": "playing",
-            "game_name": game_name,
-            "message": "AI started playing"
+            "game_id": game_id,
+            "message": "Hybrid AI started playing (learned patterns + real-time AI)"
         })
         
         cycle = 0
@@ -413,7 +418,7 @@ async def play_game_loop(game_name: str, use_gemini: bool = True, max_cycles: Op
             
             # Step 1: Capture screenshot
             logger.info("📸 Capturing screenshot...")
-            screenshot_path = await decision_engine.capture_screenshot()
+            screenshot_path = await engine.capture_screenshot()
             player_state["current_screenshot"] = screenshot_path
             
             await broadcast_decision({
@@ -422,80 +427,62 @@ async def play_game_loop(game_name: str, use_gemini: bool = True, max_cycles: Op
                 "screenshot_path": screenshot_path
             })
             
-            # Step 2: Multi-tool analysis
-            logger.info("🔍 Analyzing with multiple tools...")
-            analysis = await decision_engine.analyze_multi_tool(screenshot_path, use_gemini)
-            player_state["current_analysis"] = analysis
+            # Step 2: Hybrid decision (learned + AI)
+            logger.info("🤔 Making hybrid decision...")
+            decision = await engine.decide(screenshot_path, use_gemini)
+            player_state["current_decision"] = decision
             
-            logger.info(f"   Tools used: {', '.join(analysis['tools_used'])}")
-            logger.info(f"   Analysis time: {analysis['analysis_time']:.2f}s")
-            
-            await broadcast_decision({
-                "type": "analysis",
-                "cycle": cycle,
-                "analysis": analysis
-            })
-            
-            # Step 3: Think and decide
-            logger.info("🤔 Thinking...")
-            reasoning = decision_engine.think(analysis)
-            player_state["current_decision"] = reasoning
-            
-            logger.info("\n📋 REASONING PROCESS:")
-            for step in reasoning["reasoning_process"]:
-                logger.info(f"   Step {step['step']}: {step['action']} → {step['result']}")
-            
-            logger.info(f"\n💭 THOUGHTS:")
-            for thought in reasoning["thoughts"]:
-                logger.info(f"   • {thought}")
-            
-            logger.info(f"\n🎯 DECISION:")
-            decision = reasoning["decision"]
-            logger.info(f"   Action: {decision.get('action', 'none')}")
-            logger.info(f"   Reason: {decision.get('reason', 'no reason')}")
-            logger.info(f"   Confidence: {decision.get('confidence', 0):.2%}")
+            logger.info(f"\n📋 DECISION SUMMARY:")
+            logger.info(f"   Source: {decision['source']}")
+            logger.info(f"   Learned patterns found: {decision['reasoning']['learned_patterns']}")
+            logger.info(f"   AI options generated: {decision['reasoning']['ai_options']}")
+            logger.info(f"   Confidence: {decision['confidence']:.2%}")
             
             await broadcast_decision({
                 "type": "decision",
                 "cycle": cycle,
-                "reasoning": reasoning
+                "decision": decision
             })
             
-            # Step 4: Execute action
-            logger.info(f"\n⚡ Executing action...")
-            action_result = await decision_engine.execute_action(decision)
+            # Step 3: Execute action
+            logger.info(f"\n⚡ Executing action: {decision['action']}...")
+            action_result = await engine.execute_action(decision)
             player_state["actions_taken"] += 1
+            
+            # Step 4: Report outcome (simplified - assume success for now)
+            await engine.report_outcome(
+                decision=decision,
+                success=True,  # TODO: Detect actual success from game state
+                reward=0.0
+            )
             
             # Save decision to history
             decision_record = {
                 "cycle": cycle,
                 "timestamp": datetime.now().isoformat(),
-                "screenshot": screenshot_path,
-                "analysis": analysis,
-                "reasoning": reasoning,
+                "decision": decision,
                 "action_result": action_result,
                 "cycle_duration": time.time() - cycle_start
             }
             player_state["decision_history"].append(decision_record)
-            
-            # Save to file
-            decisions_dir = Path("/data/decisions")
-            decisions_dir.mkdir(parents=True, exist_ok=True)
-            with open(decisions_dir / f"{game_name}_cycle_{cycle:04d}.json", 'w') as f:
-                json.dump(decision_record, f, indent=2)
             
             cycle_duration = time.time() - cycle_start
             player_state["last_cycle_duration"] = cycle_duration
             player_state["elapsed_time"] = time.time() - player_state["start_time"]
             
             logger.info(f"\n⏱️  Cycle {cycle} completed in {cycle_duration:.1f}s")
+            
+            # Performance stats
+            stats = engine.get_performance_stats()
+            logger.info(f"📊 Performance: {stats['knowledge_hit_rate']:.0%} knowledge hit rate")
             logger.info(f"{'='*60}\n")
             
             await broadcast_decision({
                 "type": "cycle_complete",
                 "cycle": cycle,
                 "duration": cycle_duration,
-                "total_time": player_state["elapsed_time"]
+                "total_time": player_state["elapsed_time"],
+                "performance": stats
             })
             
             # Wait for game to respond
@@ -509,7 +496,7 @@ async def play_game_loop(game_name: str, use_gemini: bool = True, max_cycles: Op
         })
         
     except Exception as e:
-        logger.error(f"Gameplay loop failed: {e}")
+        logger.error(f"Gameplay loop failed: {e}", exc_info=True)
         player_state["status"] = "error"
         player_state["error"] = str(e)
         
@@ -522,8 +509,20 @@ async def play_game_loop(game_name: str, use_gemini: bool = True, max_cycles: Op
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown"""
+    global db_manager
+    
     logger.info("🚀 AI Player Service starting...")
+    
+    # Initialize database
+    db_manager = DatabaseManager()
+    await db_manager.connect()
+    logger.info("✅ Database connected")
+    
     yield
+    
+    # Cleanup
+    if db_manager:
+        await db_manager.disconnect()
     logger.info("👋 AI Player Service shutting down...")
 
 
@@ -542,39 +541,26 @@ async def health():
 @app.post("/play")
 async def start_playing(request: PlayRequest):
     """
-    Start AI gameplay using learned knowledge
+    Start AI gameplay using hybrid engine (learned patterns + real-time AI)
     
-    The game_name must match a game that has:
-    1. Uploaded video and learned knowledge base
-    2. Linked APK with package name
+    The game_name should be a game_id (UUID) from the games table
     """
     if player_state["status"] == "playing":
         raise HTTPException(status_code=409, detail="Already playing")
     
-    # Check if game is ready
-    registry = get_registry()
-    game = registry.get_game(request.game_name)
+    # Check if game exists
+    game_check = await db_manager.execute_read(
+        "SELECT id, package_name FROM games WHERE id = $1",
+        request.game_name
+    )
     
-    if not game:
+    if not game_check:
         raise HTTPException(
-            status_code=404, 
-            detail=f"Game '{request.game_name}' not found. Upload gameplay video first to create knowledge base."
+            status_code=404,
+            detail=f"Game '{request.game_name}' not found in database"
         )
     
-    if not registry.is_ready_to_play(request.game_name):
-        missing = []
-        if not game["apk"]["package_name"]:
-            missing.append("APK not linked - upload and link APK first")
-        if not game["knowledge"]["base_path"]:
-            missing.append("No knowledge base - upload gameplay video first")
-        
-        raise HTTPException(
-            status_code=400,
-            detail=f"Game not ready to play. Missing: {', '.join(missing)}"
-        )
-    
-    # Update status
-    registry.update_status(request.game_name, "playing")
+    game = game_check[0]
     
     # Start playing in background
     asyncio.create_task(
@@ -587,12 +573,11 @@ async def start_playing(request: PlayRequest):
     )
     
     return {
-        "message": "AI started playing",
-        "game_name": request.game_name,
-        "game_info": game,
+        "message": "Hybrid AI started playing",
+        "game_id": request.game_name,
+        "package_name": game['package_name'],
         "use_gemini": request.use_gemini,
-        "knowledge_base": game["knowledge"]["base_path"],
-        "package_name": game["apk"]["package_name"]
+        "mode": "hybrid (learned patterns + real-time AI)"
     }
 
 

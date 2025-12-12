@@ -847,6 +847,321 @@ COMMENT ON TABLE actions IS 'All actions taken during sessions';
 COMMENT ON TABLE version_comparisons IS 'Comparison reports between game versions';
 
 -- ============================================================================
+-- VIDEO LEARNING & KNOWLEDGE BASE
+-- ============================================================================
+
+-- Video Demonstrations: Store uploaded training videos and their metadata
+CREATE TABLE IF NOT EXISTS video_demonstrations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    video_path TEXT NOT NULL,
+    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    -- Video metadata
+    duration_seconds FLOAT,
+    frame_count INTEGER,
+    fps FLOAT,
+    resolution VARCHAR(20), -- e.g., "1080x1920"
+    
+    -- Processing status
+    processing_status VARCHAR(50) DEFAULT 'pending', -- pending, processing, completed, failed
+    processed_at TIMESTAMP WITH TIME ZONE,
+    processing_error TEXT,
+    
+    -- Extracted data counts
+    total_actions_extracted INTEGER DEFAULT 0,
+    total_frames_analyzed INTEGER DEFAULT 0,
+    
+    -- Analysis summary
+    levels_demonstrated INTEGER[], -- Which levels were shown
+    actions_by_type JSONB DEFAULT '{}'::jsonb, -- {tap: 50, swipe: 20, etc.}
+    success_rate FLOAT,
+    
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_demonstrations_game_id ON video_demonstrations(game_id);
+CREATE INDEX IF NOT EXISTS idx_video_demonstrations_status ON video_demonstrations(processing_status);
+CREATE INDEX IF NOT EXISTS idx_video_demonstrations_uploaded_at ON video_demonstrations(uploaded_at DESC);
+
+COMMENT ON TABLE video_demonstrations IS 'User-uploaded gameplay videos for AI learning';
+
+-- Learning Sessions: Track learning mode analysis sessions (separate from gameplay sessions)
+CREATE TABLE IF NOT EXISTS learning_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    video_id UUID NOT NULL REFERENCES video_demonstrations(id) ON DELETE CASCADE,
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    session_name VARCHAR(255),
+    
+    -- Processing state
+    status VARCHAR(50) DEFAULT 'pending', -- pending, extracting_frames, analyzing, completed, failed
+    started_at TIMESTAMP WITH TIME ZONE,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    
+    -- Frame extraction
+    total_frames INTEGER DEFAULT 0,
+    frames_extracted INTEGER DEFAULT 0,
+    extraction_status VARCHAR(50) DEFAULT 'pending', -- pending, in_progress, completed, failed
+    
+    -- Frame analysis progress
+    frames_analyzed INTEGER DEFAULT 0,
+    current_batch_number INTEGER DEFAULT 0, -- Which batch of 3 frames we're on
+    batch_size INTEGER DEFAULT 3,
+    
+    -- Results summary
+    total_patterns_found INTEGER DEFAULT 0,
+    scene_types_detected JSONB DEFAULT '{}'::jsonb, -- {menu: 10, gameplay: 50, victory: 5}
+    overall_insights JSONB DEFAULT '{}'::jsonb,
+    
+    -- Error handling
+    error_message TEXT,
+    
+    -- Configuration
+    config JSONB DEFAULT '{}'::jsonb, -- {use_gemini: true, use_grok: true, fps: 1.0}
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_sessions_video_id ON learning_sessions(video_id);
+CREATE INDEX IF NOT EXISTS idx_learning_sessions_game_id ON learning_sessions(game_id);
+CREATE INDEX IF NOT EXISTS idx_learning_sessions_status ON learning_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_learning_sessions_created_at ON learning_sessions(created_at DESC);
+
+COMMENT ON TABLE learning_sessions IS 'Learning mode sessions for video analysis with real-time UI updates';
+
+-- Video Frames: Individual frames extracted from demonstration videos with comprehensive model analysis
+CREATE TABLE IF NOT EXISTS video_frames (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    video_id UUID NOT NULL REFERENCES video_demonstrations(id) ON DELETE CASCADE,
+    learning_session_id UUID REFERENCES learning_sessions(id) ON DELETE CASCADE,
+    frame_number INTEGER NOT NULL,
+    timestamp_ms BIGINT NOT NULL, -- Milliseconds from video start
+    frame_path TEXT NOT NULL,
+    
+    -- Screen metadata
+    screen_width INTEGER,
+    screen_height INTEGER,
+    
+    -- Detected touch/tap overlay (if visible in video)
+    touch_detected BOOLEAN DEFAULT false,
+    touch_x_percent FLOAT, -- Percentage coordinates (0-100)
+    touch_y_percent FLOAT,
+    touch_type VARCHAR(20), -- tap, swipe_start, swipe_end, hold
+    
+    -- Per-model analysis results stored separately for UI display
+    ocr_analysis JSONB DEFAULT '{}'::jsonb,
+    -- {text, confidence, regions_found, what_learned, usefulness}
+    
+    gemini_analysis JSONB DEFAULT '{}'::jsonb,
+    -- {scene_type, game_state, ui_elements, action_suggestion, learning_insight, full_analysis, used, confidence}
+    
+    grok_analysis JSONB DEFAULT '{}'::jsonb,
+    -- {scene_type, game_state, ui_elements, action_suggestion, learning_insight, full_analysis, used, confidence}
+    
+    blip_analysis JSONB DEFAULT '{}'::jsonb,
+    -- {description, scene_type, confidence, what_learned}
+    
+    opencv_analysis JSONB DEFAULT '{}'::jsonb,
+    -- {ui_elements[], total_detected, what_learned}
+    
+    template_analysis JSONB DEFAULT '{}'::jsonb,
+    -- {patterns[], confidence, what_learned}
+    
+    -- Combined summary (plain English for UI)
+    combined_summary JSONB DEFAULT '{}'::jsonb,
+    -- {
+    --   scene_type, description, overall_confidence,
+    --   what_ai_learned, -- Plain English: "This is a gameplay screen with 3 screws visible. AI learned to tap highlighted objects to progress."
+    --   learning_mode: {scene_understanding, pattern_recognized, data_quality},
+    --   gameplay_mode: {action_coordinates, decision_confidence, can_play}
+    -- }
+    
+    -- View-Action-Result pattern for AI gameplay
+    view_state JSONB DEFAULT '{}'::jsonb, -- What AI sees: {scene, ui_elements, game_state}
+    recommended_action JSONB DEFAULT '{}'::jsonb, -- What to do: {type: 'tap', x_percent, y_percent, reasoning}
+    expected_result JSONB DEFAULT '{}'::jsonb, -- What should happen: {scene_change, score_increase, etc}
+    
+    -- Processing metadata
+    analyzed_at TIMESTAMP WITH TIME ZONE,
+    worker_id VARCHAR(50),
+    analysis_time_ms INTEGER,
+    methods_used TEXT[],
+    
+    metadata JSONB DEFAULT '{}'::jsonb,
+    UNIQUE(video_id, frame_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_frames_video_id ON video_frames(video_id);
+CREATE INDEX IF NOT EXISTS idx_video_frames_learning_session_id ON video_frames(learning_session_id);
+CREATE INDEX IF NOT EXISTS idx_video_frames_frame_number ON video_frames(video_id, frame_number);
+CREATE INDEX IF NOT EXISTS idx_video_frames_touch_detected ON video_frames(touch_detected) WHERE touch_detected = true;
+CREATE INDEX IF NOT EXISTS idx_video_frames_analyzed_at ON video_frames(analyzed_at) WHERE analyzed_at IS NOT NULL;
+
+-- Add missing columns if table already exists (for existing deployments)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='video_frames' AND column_name='analyzed_at') THEN
+        ALTER TABLE video_frames ADD COLUMN analyzed_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='video_frames' AND column_name='worker_id') THEN
+        ALTER TABLE video_frames ADD COLUMN worker_id VARCHAR(50);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='video_frames' AND column_name='analysis_time_ms') THEN
+        ALTER TABLE video_frames ADD COLUMN analysis_time_ms INTEGER;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='video_frames' AND column_name='methods_used') THEN
+        ALTER TABLE video_frames ADD COLUMN methods_used TEXT[];
+    END IF;
+END $$;
+
+COMMENT ON TABLE video_frames IS 'Extracted frames with comprehensive per-model analysis for AI learning';
+
+-- Frame Comparisons: Track changes between sequential frames
+CREATE TABLE IF NOT EXISTS frame_comparisons (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    learning_session_id UUID NOT NULL REFERENCES learning_sessions(id) ON DELETE CASCADE,
+    frame_a_id UUID NOT NULL REFERENCES video_frames(id) ON DELETE CASCADE,
+    frame_b_id UUID NOT NULL REFERENCES video_frames(id) ON DELETE CASCADE,
+    
+    -- What changed
+    scene_changed BOOLEAN DEFAULT false,
+    scene_change_type VARCHAR(100), -- menu_to_gameplay, gameplay_to_victory, etc.
+    
+    ui_elements_changed JSONB DEFAULT '{}'::jsonb, -- {added: [], removed: [], moved: []}
+    text_changed JSONB DEFAULT '{}'::jsonb, -- {previous: "Level 1", current: "Level 2"}
+    
+    game_state_changes JSONB DEFAULT '{}'::jsonb,
+    -- {score: {from: 100, to: 150}, lives: {from: 3, to: 2}, etc}
+    
+    -- Action that caused the change (if known)
+    action_taken JSONB DEFAULT '{}'::jsonb, -- {type: 'tap', x_percent, y_percent}
+    
+    -- Plain English summary for UI
+    change_summary TEXT,
+    -- e.g., "Scene transitioned from menu to gameplay. Score increased by 50 points. One screw was removed from screen."
+    
+    -- AI learning insights
+    pattern_recognized VARCHAR(255), -- e.g., "tap_button_starts_level", "collect_item_increases_score"
+    confidence FLOAT,
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_frame_comparisons_session_id ON frame_comparisons(learning_session_id);
+CREATE INDEX IF NOT EXISTS idx_frame_comparisons_frame_a ON frame_comparisons(frame_a_id);
+CREATE INDEX IF NOT EXISTS idx_frame_comparisons_frame_b ON frame_comparisons(frame_b_id);
+CREATE INDEX IF NOT EXISTS idx_frame_comparisons_scene_changed ON frame_comparisons(scene_changed) WHERE scene_changed = true;
+
+COMMENT ON TABLE frame_comparisons IS 'Sequential frame differences for AI pattern learning';
+
+-- Batch Summaries: Combined insights from 3-frame batches
+CREATE TABLE IF NOT EXISTS batch_summaries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    learning_session_id UUID NOT NULL REFERENCES learning_sessions(id) ON DELETE CASCADE,
+    batch_number INTEGER NOT NULL,
+    
+    -- Frame references
+    frame_ids UUID[] NOT NULL, -- Array of 3 frame IDs in this batch
+    frame_numbers INTEGER[] NOT NULL,
+    
+    -- Batch-level insights
+    dominant_scene_type VARCHAR(50), -- Most common scene in batch
+    scene_consistency FLOAT, -- How similar are the 3 frames (0-1)
+    
+    -- Combined learning from all 3 frames
+    batch_insights JSONB DEFAULT '{}'::jsonb,
+    -- {
+    --   overall_understanding: "Player progressing through level 1, collecting screws",
+    --   patterns_observed: ["tap_to_collect", "gravity_physics", "obstacle_avoidance"],
+    --   ai_readiness: 0.85, -- How ready AI is to play based on this batch
+    --   key_learnings: ["Screws are collectible", "Avoid red obstacles", "Green button at bottom starts level"]
+    -- }
+    
+    -- What changed across the batch (frame 1→2→3)
+    progression_summary TEXT,
+    -- e.g., "Player collected 2 screws and avoided 1 obstacle. Score increased from 0 to 200."
+    
+    -- Patterns extracted from this batch
+    patterns_identified INTEGER DEFAULT 0,
+    new_patterns_found INTEGER DEFAULT 0, -- Patterns not seen before
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(learning_session_id, batch_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_summaries_session_id ON batch_summaries(learning_session_id);
+CREATE INDEX IF NOT EXISTS idx_batch_summaries_batch_number ON batch_summaries(learning_session_id, batch_number);
+
+COMMENT ON TABLE batch_summaries IS 'Aggregated insights from 3-frame analysis batches';
+
+-- Game Knowledge: Learned patterns and decision templates from videos and gameplay
+CREATE TABLE IF NOT EXISTS game_knowledge (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    pattern_type VARCHAR(100) NOT NULL, -- tap_button, swipe_direction, sequence, recovery, etc.
+    
+    -- Pattern definition
+    pattern_name VARCHAR(255) NOT NULL,
+    pattern_data JSONB NOT NULL, -- Full pattern specification
+    
+    -- Context/conditions when this pattern applies
+    screen_conditions JSONB, -- {scene_type: 'gameplay', has_button: true, ocr_contains: 'Play', etc.}
+    ui_signature JSONB, -- Visual signatures (colors, shapes, positions)
+    
+    -- Action to take
+    action_template JSONB NOT NULL, -- {type: 'tap', x: 500, y: 1000, delay: 0.5, etc.}
+    
+    -- Learning statistics
+    times_seen INTEGER DEFAULT 1,
+    times_successful INTEGER DEFAULT 0,
+    times_failed INTEGER DEFAULT 0,
+    confidence_score FLOAT DEFAULT 0.5, -- 0-1, based on success rate
+    avg_reward FLOAT DEFAULT 0.0,
+    
+    -- Sources
+    learned_from_video BOOLEAN DEFAULT false,
+    learned_from_play BOOLEAN DEFAULT false,
+    source_video_ids UUID[], -- Which videos contributed
+    source_session_ids UUID[], -- Which sessions contributed
+    
+    -- Metadata
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_used_at TIMESTAMP WITH TIME ZONE,
+    
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_knowledge_game_id ON game_knowledge(game_id);
+CREATE INDEX IF NOT EXISTS idx_game_knowledge_pattern_type ON game_knowledge(pattern_type);
+CREATE INDEX IF NOT EXISTS idx_game_knowledge_confidence ON game_knowledge(confidence_score DESC);
+CREATE INDEX IF NOT EXISTS idx_game_knowledge_pattern_data ON game_knowledge USING GIN(pattern_data);
+CREATE INDEX IF NOT EXISTS idx_game_knowledge_screen_conditions ON game_knowledge USING GIN(screen_conditions);
+CREATE INDEX IF NOT EXISTS idx_game_knowledge_updated_at ON game_knowledge(updated_at DESC);
+
+COMMENT ON TABLE game_knowledge IS 'Learned gameplay patterns and decision templates from videos and AI play';
+
+-- Function to update game_knowledge confidence based on success rate
+CREATE OR REPLACE FUNCTION update_knowledge_confidence()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.times_seen > 0 THEN
+        NEW.confidence_score = CAST(NEW.times_successful AS FLOAT) / CAST(NEW.times_seen AS FLOAT);
+    END IF;
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER update_knowledge_confidence_trigger
+BEFORE UPDATE ON game_knowledge
+FOR EACH ROW
+WHEN (OLD.times_seen IS DISTINCT FROM NEW.times_seen OR 
+      OLD.times_successful IS DISTINCT FROM NEW.times_successful)
+EXECUTE FUNCTION update_knowledge_confidence();
+
+-- ============================================================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================================================
 

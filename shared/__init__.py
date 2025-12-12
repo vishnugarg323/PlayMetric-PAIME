@@ -2,6 +2,11 @@
 Shared modules for PlayMetric services
 """
 
-from .database import DatabaseManager, get_db_session, init_redis, get_redis
+# For services that DON'T use SQLAlchemy (learning, ai-player):
+# Use asyncpg_manager which has no sqlalchemy dependency
+from .asyncpg_manager import DatabaseManager
 
-__all__ = ["DatabaseManager", "get_db_session", "init_redis", "get_redis"]
+__all__ = ["DatabaseManager"]
+
+# For services that need SQLAlchemy (orchestrator, etc):
+# Import directly: from shared.database import get_db_session, etc

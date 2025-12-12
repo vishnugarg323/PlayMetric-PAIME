@@ -67,6 +67,7 @@ services:
   # ============================================
   # 3. OBSERVATION SERVICE
   # ============================================
+  
   observation:
     image: playmetric-observation:latest
     build:
@@ -143,27 +144,28 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # 5. VISION AI SERVICE (BLIP-2/Gemini/OCR)
+  # 5. VISION AI SERVICES (Multiple workers with Load Balancer)
   # ============================================
-  vision:
+  
+  # Vision Worker 1
+  vision-worker-1:
     image: playmetric-vision:latest
     build:
       context: ./vision
       dockerfile: Dockerfile
       args:
         BASE_IMAGE: playmetric-base-ml:latest
-    container_name: playmetric-vision
-    # Removed postgres dependency - using Railway TimescaleDB
-    ports:
-      - "8006:8006"
+    container_name: playmetric-vision-worker-1
     environment:
       - API_HOST=0.0.0.0
       - API_PORT=8006
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - WORKER_ID=1
     volumes:
-      - ./data/models:/data/models  # BLIP-2 model cache
+      - ./data/models:/data/models
       - ./data/screenshots:/data/screenshots
+      - ./data/video_frames:/data/video_frames
       - ./shared:/app/shared
     networks:
       - playmetric-network
@@ -171,9 +173,75 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G  # BLIP-2 uses ~1.6GB
+          memory: 8G
         reservations:
           memory: 2G
+
+  # Vision Worker 2
+  vision-worker-2:
+    image: playmetric-vision:latest
+    container_name: playmetric-vision-worker-2
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8006
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GEMINI_API_KEY=${GEMINI_API_KEY_2:-${GEMINI_API_KEY:-}}
+      - WORKER_ID=2
+    volumes:
+      - ./data/models:/data/models
+      - ./data/screenshots:/data/screenshots
+      - ./data/video_frames:/data/video_frames
+      - ./shared:/app/shared
+    networks:
+      - playmetric-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 2G
+
+  # Vision Worker 3
+  vision-worker-3:
+    image: playmetric-vision:latest
+    container_name: playmetric-vision-worker-3
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8006
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GEMINI_API_KEY=${GEMINI_API_KEY_3:-${GEMINI_API_KEY:-}}
+      - WORKER_ID=3
+    volumes:
+      - ./data/models:/data/models
+      - ./data/screenshots:/data/screenshots
+      - ./data/video_frames:/data/video_frames
+      - ./shared:/app/shared
+    networks:
+      - playmetric-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 2G
+
+  # Vision Load Balancer (nginx)
+  vision:
+    image: nginx:alpine
+    container_name: playmetric-vision-lb
+    depends_on:
+      - vision-worker-1
+      - vision-worker-2
+      - vision-worker-3
+    ports:
+      - "8006:8006"
+    volumes:
+      - ./vision/nginx-lb.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - playmetric-network
+    restart: unless-stopped
 
   # ============================================
   # 6. LEARNING SERVICE (Offline Video Analysis)
@@ -196,8 +264,12 @@ services:
       - API_PORT=8007
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - VISION_SERVICE_URL=http://vision:8006
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./data/videos:/data/videos
+      - ./data/video_frames:/data/video_frames  # Add video frames volume
       - ./data/knowledge:/data/knowledge
       - ./data/screenshots:/data/screenshots
       - ./shared:/app/shared
@@ -229,6 +301,9 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - VISION_SERVICE_URL=http://vision:8006
       - OBSERVATION_SERVICE_URL=http://observation:8001
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./data/knowledge:/data/knowledge
       - ./data/screenshots:/data/screenshots
